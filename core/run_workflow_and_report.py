@@ -22,7 +22,7 @@ TELEGRAM: TG_TOKEN — секретный ключ бота. Он хранитс
 (/revoke) и обнови значение в .env / GitHub Secrets.
 """
 
-from artifact_paths import SCREENS_DIR, LOGS_DIR, screen_path, log_path
+from artifact_paths import ROOT_DIR, SCREENS_DIR, LOGS_DIR, screen_path, log_path
 
 import os
 import sys
@@ -332,7 +332,7 @@ def parse_gpr_results(output: str, task_map: dict):
 def run_and_collect(script_path: str, task_map: dict, result_format="standard", script_args=()):
     print(f"Запускаю {script_path} ...")
     result = subprocess.run(
-        [sys.executable, script_path, *script_args],
+        [sys.executable, script_path, *script_args], cwd=ROOT_DIR,
         capture_output=True, text=True, encoding="utf-8", errors="replace"
     )
     output = result.stdout + "\n" + result.stderr
@@ -425,10 +425,16 @@ from pathlib import Path
 import subprocess
 import sys
 import uuid
-CONTACTS_DIR = Path(__file__).resolve().parent
-
-def contacts_checks():
-    return json.loads((CONTACTS_DIR / 'contacts_checks.json').read_text(encoding='utf-8'))
+def contacts_checks(script_path=None):
+    candidates = [
+        Path(script_path).parent / 'contacts_checks.json' if script_path else None,
+        ROOT_DIR / 'tests' / 'contacts' / 'contacts_checks.json',
+        Path(__file__).resolve().parent / 'contacts_checks.json'
+    ]
+    for p in candidates:
+        if p and p.is_file():
+            return json.loads(p.read_text(encoding='utf-8'))
+    raise FileNotFoundError('Не найден contacts_checks.json')
 CONTACTS_ROW_RANGE = (213, 237)
 
 def parse_contacts_results(output, run_id):
@@ -448,10 +454,12 @@ def parse_contacts_results(output, run_id):
         raise ValueError('Недопустимый статус/причина')
     return sorted(results, key=lambda r: r['id'])
 
-def contacts_findings_for_sheet(results):
-    return [('Контакты: ' + contacts_checks()[r['id'] - 1]['name'], r['status'] == 'PASS') for r in results if r['status'] != 'SKIP']
+def contacts_findings_for_sheet(results, script_path=None):
+    checks = contacts_checks(script_path)
+    return [('Контакты: ' + checks[r['id'] - 1]['name'], r['status'] == 'PASS') for r in results if r['status'] != 'SKIP']
 
-def contacts_summary(results):
+def contacts_summary(results, script_path=None):
+    checks = contacts_checks(script_path)
     failed = [r for r in results if r['status'] == 'FAIL']
     skipped = [r for r in results if r['status'] == 'SKIP']
     if not failed and (not skipped):
@@ -462,7 +470,7 @@ def contacts_summary(results):
     parts = [header]
     for r in failed + skipped:
         prefix = '❌' if r['status'] == 'FAIL' else '⏭ Не выполнено:'
-        line = f"{prefix} {escape(contacts_checks()[r['id'] - 1]['name'])} — {escape(r.get('reason', '')[:500])}"
+        line = f"{prefix} {escape(checks[r['id'] - 1]['name'])} — {escape(r.get('reason', '')[:500])}"
         if len(parts[-1]) + len(line) > 3400:
             parts.append('<b>Контакты — продолжение отчёта</b>')
         parts[-1] += '\n' + line
@@ -516,11 +524,9 @@ def run_contacts(script_path, args, report_results, tg_send, tg_photo):
     run_id = uuid.uuid4().hex
     env = dict(os.environ, CONTACTS_RUN_ID=run_id, PYTHONIOENCODING='utf-8')
     script_path = Path(script_path).resolve()
-    if script_path.parent != CONTACTS_DIR:
-        raise ValueError('contacts_test.py и run_workflow_and_report.py должны лежать рядом')
     log_path = LOGS_DIR / f'contacts_log_{datetime.now():%Y%m%d_%H%M%S}_{run_id[:8]}.txt'
     try:
-        completed = contacts_stream([sys.executable, '-u', str(script_path), *args], CONTACTS_DIR, env, log_path)
+        completed = contacts_stream([sys.executable, '-u', str(script_path), *args], ROOT_DIR, env, log_path)
         output = completed.stdout + '\n' + completed.stderr
         results = parse_contacts_results(output, run_id)
         if completed.returncode not in (0, 1) or (completed.returncode != 0 and all((r['status'] == 'PASS' for r in results))):
@@ -530,16 +536,16 @@ def run_contacts(script_path, args, report_results, tg_send, tg_photo):
         print(message)
         tg_send(message)
         return 2
-    findings = contacts_findings_for_sheet(results)
+    findings = contacts_findings_for_sheet(results, script_path)
     try:
         report_results(findings, row_range=CONTACTS_ROW_RANGE)
     except Exception as exc:
         print('Не удалось записать результаты в Google Sheets:', type(exc).__name__)
         tg_send('⚠️ <b>Контакты: результаты не записаны в Google Sheets</b>\nЛокальный отчёт сохранён.')
-        for message in contacts_summary(results):
+        for message in contacts_summary(results, script_path):
             tg_send(message)
         return 2
-    for message in contacts_summary(results):
+    for message in contacts_summary(results, script_path):
         tg_send(message)
     screenshot = contacts_current_screenshot(results, run_id)
     if screenshot:
@@ -577,8 +583,14 @@ def run_structured_workflow(script_path, args, module_key, checks_file, row_rang
         if hasattr(stream, 'reconfigure'):
             stream.reconfigure(encoding='utf-8', errors='replace')
     script = Path(script_path).resolve()
-    root = Path(__file__).resolve().parent
-    expected = json.loads((root / checks_file).read_text(encoding='utf-8'))
+    checks_candidate = script.parent / checks_file
+    if not checks_candidate.exists():
+        checks_candidate = ROOT_DIR / 'tests' / script.parent.name / checks_file
+    if not checks_candidate.exists():
+        checks_candidate = ROOT_DIR / checks_file
+    if not checks_candidate.exists():
+        checks_candidate = Path(__file__).resolve().parent / checks_file
+    expected = json.loads(checks_candidate.read_text(encoding='utf-8'))
     run_id = uuid.uuid4().hex
     result_path = LOGS_DIR / f'{script.stem}_results_{run_id}.json'
     log_path = LOGS_DIR / f'{script.stem}_console_{run_id}.txt'
@@ -589,7 +601,7 @@ def run_structured_workflow(script_path, args, module_key, checks_file, row_rang
     rows, skipped, payload = [], expected, {}
     run_error = sheet_error = ''
     try:
-        completed = contacts_stream([sys.executable, '-u', str(script), *args], root, env,
+        completed = contacts_stream([sys.executable, '-u', str(script), *args], ROOT_DIR, env,
                                     log_path, timeout=7200)
         payload = json.loads(result_path.read_text(encoding='utf-8'))
         rows, skipped = validate_workflow_results(payload, run_id, expected)

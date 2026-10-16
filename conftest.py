@@ -1,3 +1,12 @@
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+for d in (ROOT, ROOT / "core", ROOT / "config"):
+    p = str(d)
+    if p not in sys.path:
+        sys.path.insert(0, p)
+
 import pytest
 from sheet_reporter import report_result
 

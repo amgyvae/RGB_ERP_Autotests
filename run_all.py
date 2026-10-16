@@ -24,21 +24,21 @@ from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-RUNNER = "run_workflow_and_report.py"
+RUNNER = os.path.join("core", "run_workflow_and_report.py")
 MODULE_TIMEOUT = 3 * 60 * 60  # 3 часа на модуль
 
 # ключ: (название, команда, нужен ли NCALayer / ЭЦП)
 MODULES = {
-    "contacts":  ("Контакты",                [RUNNER, "contacts_test.py"],               False),
-    "passport":  ("Паспорт проектов",        [RUNNER, "pasportProjects.py"],             False),
-    "smeta":     ("Смета",                   [RUNNER, "smeta.py"],                       False),
-    "finance":   ("Финансы (ДДС / ГФР)",     [RUNNER, "finance.py"],                     False),
-    "tasks":     ("Задачи и поручения",      ["zadashi.py"],                             False),
-    "gpr":       ("ГПР",                     [RUNNER, "gpr_test.py"],                    True),
-    "contracts": ("Договоры",                [RUNNER, "contract_workflow_new_design.py"], True),
-    "waybills":  ("Накладные",               [RUNNER, "waybill_workflow_new_design.py"],  True),
-    "invoices":  ("Счета на оплату",         [RUNNER, "invoice_workflow_ecp.py"],         True),
-    "acts":      ("Акты (АВР, КС-2, Ф-2В)",  [RUNNER, "test-akt.py"],                    True),
+    "contacts":  ("Контакты",                [RUNNER, os.path.join("tests", "contacts", "contacts_test.py")],               False),
+    "passport":  ("Паспорт проектов",        [RUNNER, os.path.join("tests", "passport", "pasportProjects.py")],             False),
+    "smeta":     ("Смета",                   [RUNNER, os.path.join("tests", "smeta", "smeta.py")],                          False),
+    "finance":   ("Финансы (ДДС / ГФР)",     [RUNNER, os.path.join("tests", "finance", "finance.py")],                      False),
+    "tasks":     ("Задачи и поручения",      [os.path.join("tests", "tasks", "zadashi.py")],                                False),
+    "gpr":       ("ГПР",                     [RUNNER, os.path.join("tests", "gpr", "gpr_test.py")],                         True),
+    "contracts": ("Договоры",                [RUNNER, os.path.join("tests", "contracts", "contract_workflow_new_design.py")], True),
+    "waybills":  ("Накладные",               [RUNNER, os.path.join("tests", "waybills", "waybill_workflow_new_design.py")],  True),
+    "invoices":  ("Счета на оплату",         [RUNNER, os.path.join("tests", "invoices", "invoice_workflow_ecp.py")],         True),
+    "acts":      ("Акты (АВР, КС-2, Ф-2В)",  [RUNNER, os.path.join("tests", "acts", "test-akt.py")],                         True),
 }
 
 
@@ -56,7 +56,10 @@ def run_module(key, log):
     banner = f"\n{'=' * 70}\n▶ {title} ({key}) — {datetime.now():%d.%m.%Y %H:%M:%S}\n{'=' * 70}\n"
     print(banner, flush=True)
     log.write(banner)
-    env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
+    pp_dirs = [str(ROOT), str(ROOT / "core"), str(ROOT / "config")]
+    if os.environ.get("PYTHONPATH"):
+        pp_dirs.append(os.environ["PYTHONPATH"])
+    env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1", PYTHONPATH=os.pathsep.join(pp_dirs))
     started = time.monotonic()
     timed_out = threading.Event()
     with subprocess.Popen([sys.executable, "-u", *command], cwd=ROOT, env=env,

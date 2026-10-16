@@ -12,8 +12,14 @@ import os
 import sys
 from pathlib import Path
 
-ROOT_DIR = Path(__file__).resolve().parent
+ROOT_DIR = Path(__file__).resolve().parent.parent
 ENV_FILE = ROOT_DIR / ".env"
+
+# Гарантируем, что модули из core, config и корня всегда импортируются без ошибок
+for _dir in (ROOT_DIR, ROOT_DIR / "core", ROOT_DIR / "config"):
+    _p = str(_dir)
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 _warned = set()
 
