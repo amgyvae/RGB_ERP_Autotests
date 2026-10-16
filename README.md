@@ -241,5 +241,6 @@ copy .env.example .env  # Windows
 ---
 
 ## 👨‍💻 Автор / QA Automation Engineer
+- **Автор:** Sharipzhan Margulan
 - **Роль:** QA Lead / QA Automation Engineer
 - **Стек:** Python, Selenium WebDriver, Pytest, GitHub Actions, Google Sheets API, Telegram Bot API, Desktop Automation (pywinauto/UIA).
