@@ -1,0 +1,40 @@
+# ===== Секреты — НИКОГДА не коммитить =====
+.env
+.env.*
+!.env.example
+service_account.json
+*service_account*.json
+*.p12
+
+# ===== Результаты прогонов (генерируются автоматически) =====
+logs/
+screens/
+contacts_diagnostics/
+act_results_*.json
+finance_results_*.json
+*_results_*.json
+*_console_*.txt
+*_log_*.txt
+filter_report.txt
+debug_*.png
+scr_fail_*.png
+
+# ===== Резервные копии и временные файлы =====
+.backup_original/
+*.before_*.py
+index.html
+C:*/
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+env/
+
+# ===== IDE / ОС =====
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

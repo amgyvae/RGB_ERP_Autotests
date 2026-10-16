@@ -1,0 +1,14 @@
+# Основные зависимости (Windows / macOS / Linux)
+selenium>=4.15
+webdriver-manager>=4.0
+requests>=2.31
+gspread>=6.0
+google-auth>=2.23
+openpyxl>=3.1
+Pillow>=10.0
+pytest>=7.4
+
+# Только Windows: автоматизация окна NCALayer (подписание ЭЦП)
+pywinauto>=0.6.8; sys_platform == "win32"
+pyautogui>=0.9.54; sys_platform == "win32"
+pyperclip>=1.8; sys_platform == "win32"

@@ -1,0 +1,118 @@
+name: Daily ERP Autotests
+
+on:
+  # Каждый день в 08:00 по Казахстану (UTC+5) = 03:00 UTC.
+  # GitHub запускает расписание только из ветки по умолчанию (main).
+  schedule:
+    - cron: "0 3 * * *"
+  # Кнопка «Run workflow» во вкладке Actions для ручного запуска.
+  workflow_dispatch:
+    inputs:
+      modules:
+        description: "Модули через запятую (all = все): contacts,passport,smeta,finance,tasks,gpr,contracts,waybills,invoices,acts"
+        required: false
+        default: "all"
+      ncalayer:
+        description: "Модули с ЭЦП (NCALayer) на облачном раннере"
+        type: choice
+        options: [skip, include]
+        default: skip
+
+# Не запускать два прогона одновременно: тесты пишут в одну таблицу и используют одни аккаунты.
+concurrency:
+  group: erp-autotests
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  TZ: Asia/Almaty
+  PYTHONIOENCODING: utf-8
+  PYTHONUTF8: "1"
+
+jobs:
+  plan:
+    name: Планирование прогона
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Список модулей
+        id: matrix
+        env:
+          MODULES: ${{ inputs.modules || vars.AUTOTEST_MODULES || 'all' }}
+          # На облачном Ubuntu нет NCALayer — такие модули пропускаются,
+          # если не выбран self-hosted раннер или ncalayer=include.
+          WEB_ONLY: ${{ (vars.AUTOTEST_RUNNER || 'ubuntu-latest') == 'ubuntu-latest' && inputs.ncalayer != 'include' }}
+        run: |
+          FLAGS=""
+          if [ "$WEB_ONLY" = "true" ]; then FLAGS="--web-only"; fi
+          MATRIX=$(python run_all.py --matrix "$MODULES" $FLAGS)
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+          echo "### План прогона" >> "$GITHUB_STEP_SUMMARY"
+          echo "Модули: \`$MODULES\` · только web: \`$WEB_ONLY\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "$MATRIX"
+
+  test:
+    name: ${{ matrix.title }}
+    needs: plan
+    if: ${{ fromJSON(needs.plan.outputs.matrix).include[0] }}
+    # ubuntu-latest — облако GitHub; self-hosted — ваш Windows-ПК с NCALayer
+    # (задаётся переменной репозитория AUTOTEST_RUNNER).
+    runs-on: ${{ vars.AUTOTEST_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false   # упавший модуль не останавливает остальные
+      max-parallel: 1    # строго по очереди
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      HEADLESS: ${{ vars.HEADLESS || '1' }}
+      TG_ENABLED: ${{ vars.TG_ENABLED || '1' }}
+      RGB_ACCOUNT1_LOGIN: ${{ secrets.RGB_ACCOUNT1_LOGIN }}
+      RGB_ACCOUNT1_PASSWORD: ${{ secrets.RGB_ACCOUNT1_PASSWORD }}
+      RGB_ACCOUNT1_PASSWORD_ALT: ${{ secrets.RGB_ACCOUNT1_PASSWORD_ALT }}
+      RGB_ACCOUNT2_LOGIN: ${{ secrets.RGB_ACCOUNT2_LOGIN }}
+      RGB_ACCOUNT2_PASSWORD: ${{ secrets.RGB_ACCOUNT2_PASSWORD }}
+      RGB_ACCOUNT3_LOGIN: ${{ secrets.RGB_ACCOUNT3_LOGIN }}
+      RGB_ACCOUNT3_PASSWORD: ${{ secrets.RGB_ACCOUNT3_PASSWORD }}
+      NCA_KEY1_PASSWORD: ${{ secrets.NCA_KEY1_PASSWORD }}
+      NCA_KEY2_PASSWORD: ${{ secrets.NCA_KEY2_PASSWORD }}
+      TG_TOKEN: ${{ secrets.TG_TOKEN }}
+      TG_CHATS: ${{ secrets.TG_CHATS }}
+      GOOGLE_SPREADSHEET_ID: ${{ secrets.GOOGLE_SPREADSHEET_ID }}
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Установка зависимостей
+        run: python -m pip install -r requirements.txt
+
+      - name: Подготовка папки загрузок
+        run: python -c "import os; os.makedirs(os.path.expanduser('~/Downloads'), exist_ok=True)"
+
+      - name: Запуск — ${{ matrix.title }}
+        run: python run_all.py ${{ matrix.module }}
+
+      - name: Логи и скриншоты
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-${{ matrix.module }}-${{ github.run_number }}
+          path: |
+            logs/
+            screens/
+            contacts_diagnostics/
+          retention-days: 14
+          if-no-files-found: ignore
