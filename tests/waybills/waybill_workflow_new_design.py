@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 НАКЛАДНАЯ (waybills) — АДАПТИРОВАНО под новый дизайн портала.
 
@@ -90,18 +90,18 @@ driver.implicitly_wait(0)  # ВАЖНО: было 3 — при большом к
 # каждая неудачная попытка молча ждала до 3 секунд лишних. Явные
 # ожидания (time.sleep/WebDriverWait) в коде расставлены сами, этого
 # достаточно.
-login_val = env("RGB_ACCOUNT2_LOGIN")
-pass_val = env("RGB_ACCOUNT2_PASSWORD")
+login_val = env("RGB_ACCOUNT1_LOGIN")
+pass_val = env("RGB_ACCOUNT1_PASSWORD")
 
-# Основной аккаунт основного аккаунта
-NCA_PASSWORD = env("NCA_KEY2_PASSWORD")
-MAIN_P12_PATH = 'C:\\Program Files\\NCALayer\\GOST512_48db21f1bd37f4480d8156fe77e4e4067e4e6d67.p12'
+# ЭЦП первого подписанта
+NCA_PASSWORD = env("NCA_KEY1_PASSWORD")
+MAIN_P12_PATH = env("NCA_KEY1_PATH", r"C:\Program Files\NCALayer\GOST2015_13-02-2026-18_04.p12")
 
-# --- Аккаунт второй, тут у меня был Талгат аккаунт. Можешь свой написать ---
-TALGAT_LOGIN = env("RGB_ACCOUNT1_LOGIN")
-TALGAT_PASS = env("RGB_ACCOUNT1_PASSWORD")
-TALGAT_NCA_PASSWORD = env("NCA_KEY1_PASSWORD")
-TALGAT_P12_PATH = r"C:\Program Files\NCALayer\GOST512_913d9d38ab211b654c169db360b6d139761e941c.p12"
+# --- Второй подписант (Талгат Ерланович) ---
+TALGAT_LOGIN = env("RGB_ACCOUNT3_LOGIN", env("RGB_ACCOUNT2_LOGIN"))
+TALGAT_PASS = env("RGB_ACCOUNT3_PASSWORD", env("RGB_ACCOUNT2_PASSWORD"))
+TALGAT_NCA_PASSWORD = env("NCA_KEY2_PASSWORD")
+TALGAT_P12_PATH = env("NCA_KEY2_PATH", r"C:\Program Files\NCALayer\GOST512_b2c2008a1d14dd3f6a531597fb334afc4b3c6e76.p12")
 
 BASE_URL = "https://testportal.rgbgroup.kz/"
 WAYBILLS_URL = "https://testportal.rgbgroup.kz/documents/waybills"

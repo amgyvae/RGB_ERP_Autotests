@@ -120,8 +120,8 @@ driver.implicitly_wait(0)  # ВАЖНО: было 3 — вызывало огр�
 # несколько стратегий поиска подряд) молча висеть до 3 секунд, прежде чем
 # перейти к следующей. Именно это, а не сами паузы, было причиной
 # 2+ минут на одно значение фильтра.
-login_val = env("RGB_ACCOUNT2_LOGIN")
-pass_val = env("RGB_ACCOUNT2_PASSWORD")
+login_val = env("RGB_ACCOUNT1_LOGIN", env("RGB_ACCOUNT2_LOGIN"))
+pass_val = env("RGB_ACCOUNT1_PASSWORD", env("RGB_ACCOUNT2_PASSWORD"))
 
 BASE_URL = "https://testportal.rgbgroup.kz/"
 TASKS_URL = "https://testportal.rgbgroup.kz/?tab=tasks"

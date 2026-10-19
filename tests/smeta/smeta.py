@@ -102,12 +102,12 @@ def init_driver():
     driver.implicitly_wait(0)
 
 
-login_val = env("RGB_ACCOUNT3_LOGIN")
-pass_val = env("RGB_ACCOUNT3_PASSWORD")
+login_val = env("RGB_ACCOUNT1_LOGIN", env("RGB_ACCOUNT3_LOGIN"))
+pass_val = env("RGB_ACCOUNT1_PASSWORD", env("RGB_ACCOUNT3_PASSWORD"))
 
 # Утверждающий / подписант 
-SECOND_LOGIN = env("RGB_ACCOUNT1_LOGIN")
-SECOND_PASS = env("RGB_ACCOUNT1_PASSWORD_ALT")
+SECOND_LOGIN = env("RGB_ACCOUNT2_LOGIN", env("RGB_ACCOUNT1_LOGIN"))
+SECOND_PASS = env("RGB_ACCOUNT2_PASSWORD", env("RGB_ACCOUNT1_PASSWORD_ALT"))
 
 BASE_URL = "https://testportal.rgbgroup.kz/"
 ESTIMATES_URL = BASE_URL + "estimates"
@@ -116,8 +116,8 @@ WAIT = 15
 STAMP = datetime.now().strftime('%d%m-%H%M%S')
 ESTIMATE_NAME = f"AutoTest смета {STAMP}"
 PROJECT_QUERY = "Flagman"
-APPROVER_QUERY = 'Бейсембаев'
-UTV_QUERY = 'Алд'
+APPROVER_QUERY = env("RGB_APPROVER_QUERY", 'Бейсембаев')
+UTV_QUERY = env("RGB_UTV_QUERY", 'Алд')
 UTV_KEYS = ['алдажаров диас андреевич', 'алдaжаров диасс андреевичч']
 MAX_DUP_TRIES = 40                   # сколько смет для дублирования перебирать
 

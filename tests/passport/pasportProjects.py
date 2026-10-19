@@ -96,8 +96,8 @@ def init_driver():
     )
     driver.implicitly_wait(0)
 
-login_val = env("RGB_ACCOUNT3_LOGIN")
-pass_val = env("RGB_ACCOUNT3_PASSWORD")
+login_val = env("RGB_ACCOUNT1_LOGIN", env("RGB_ACCOUNT3_LOGIN"))
+pass_val = env("RGB_ACCOUNT1_PASSWORD", env("RGB_ACCOUNT3_PASSWORD"))
 
 BASE_URL = "https://testportal.rgbgroup.kz/"
 PROJECTS_URL = BASE_URL + "projects"
