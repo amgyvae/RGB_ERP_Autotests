@@ -96,8 +96,8 @@ def init_driver():
     )
     driver.implicitly_wait(0)
 
-login_val = env("RGB_ACCOUNT1_LOGIN", env("RGB_ACCOUNT3_LOGIN"))
-pass_val = env("RGB_ACCOUNT1_PASSWORD", env("RGB_ACCOUNT3_PASSWORD"))
+login_val = env("RGB_ACCOUNT3_LOGIN", env("RGB_ACCOUNT1_LOGIN"))
+pass_val = env("RGB_ACCOUNT3_PASSWORD", env("RGB_ACCOUNT1_PASSWORD"))
 
 BASE_URL = "https://testportal.rgbgroup.kz/"
 PROJECTS_URL = BASE_URL + "projects"
@@ -742,6 +742,49 @@ def login_with(login_value, password_value):
         log(f"  ⚠ Логин {login_value} не удался", "WARN")
         return False
     log(f"  ✓ Успешный вход: {login_value}", "PASS")
+    dismiss_news_popup(wait=3)
+    return True
+
+
+def dismiss_news_popup(wait=0):
+    deadline = time.monotonic() + wait
+    while True:
+        titles = [e for e in driver.find_elements(
+            By.XPATH, "//*[normalize-space(text())='Новые новости']") if e.is_displayed()]
+        if titles:
+            for title in titles:
+                roots = title.find_elements(By.XPATH,
+                    "./ancestor::*[.//button[normalize-space(.)='Закрыть']][1]")
+                if not roots:
+                    roots = title.find_elements(By.XPATH,
+                        "./ancestor::*[@role='dialog' or @aria-modal='true'][1]")
+                for root in roots:
+                    buttons = root.find_elements(By.XPATH,
+                        ".//button[normalize-space(.)='Закрыть']")
+                    buttons += root.find_elements(By.XPATH,
+                        ".//button[@aria-label='Закрыть' or @aria-label='Close' "
+                        "or @title='Закрыть']")
+                    for button in buttons:
+                        if not button.is_displayed() or not button.is_enabled():
+                            continue
+                        try:
+                            button.click()
+                        except Exception:
+                            js_click(button)
+                        gone = wait_for_state(lambda: not any(e.is_displayed() for e in
+                            driver.find_elements(By.XPATH,
+                                "//*[normalize-space(text())='Новые новости']")), timeout=3)
+                        if gone:
+                            log("  ✓ Окно «Новые новости» закрыто")
+                            return True
+            log("  ⚠ Окно «Новые новости» не удалось закрыть", "WARN")
+        scrims = [s for s in driver.find_elements(By.CSS_SELECTOR, "button.ui-kit-modal__scrim") if s.is_displayed()]
+        for s in scrims:
+            try: js_click(s)
+            except Exception: pass
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.3)
     return True
 
 
@@ -1407,15 +1450,23 @@ def stage_login():
         if not login_with(login_val, pass_val):
             return False
     time.sleep(2)
+    dismiss_news_popup(wait=2)
     if "/projects" not in driver.current_url:
         driver.get(PROJECTS_URL)
         time.sleep(2)
     wait_for_state(lambda: is_login_page() or passport_list_ready(), timeout=25)
+    dismiss_news_popup(wait=2)
     if is_login_page():
         return False
     if "/projects" not in driver.current_url:
-        driver.get(PROJECTS_URL)
-        time.sleep(2)
+        try:
+            click_text_deepest("Паспорта проектов", "exact")
+            time.sleep(2)
+        except Exception:
+            pass
+        if "/projects" not in driver.current_url:
+            driver.get(PROJECTS_URL)
+            time.sleep(2)
     ok = "/projects" in driver.current_url
     log(f"  URL: {driver.current_url}", "PASS" if ok else "WARN")
     return ok

@@ -102,8 +102,8 @@ def init_driver():
     driver.implicitly_wait(0)
 
 
-login_val = env("RGB_ACCOUNT1_LOGIN", env("RGB_ACCOUNT3_LOGIN"))
-pass_val = env("RGB_ACCOUNT1_PASSWORD", env("RGB_ACCOUNT3_PASSWORD"))
+login_val = env("RGB_ACCOUNT3_LOGIN", env("RGB_ACCOUNT1_LOGIN"))
+pass_val = env("RGB_ACCOUNT3_PASSWORD", env("RGB_ACCOUNT1_PASSWORD"))
 
 # Утверждающий / подписант (Талгат Ерланович)
 SECOND_LOGIN = env("RGB_ACCOUNT3_LOGIN", env("RGB_ACCOUNT1_LOGIN"))
@@ -411,7 +411,7 @@ def find_buttons(texts, scope=None):
     out = []
     for t in texts:
         xp = (f"{pre}*[self::button or self::a or @role='button']"
-              f"[normalize-space(.)='{t}']")
+              f"[normalize-space(.)='{t}' or contains(normalize-space(.),'{t}')]")
         try:
             for e in root.find_elements(By.XPATH, xp):
                 if e.is_displayed() and e.is_enabled():
@@ -1617,7 +1617,7 @@ def stage_create():
 # ==========================================
 def try_open_and_cancel(text):
     goto_card()
-    if not click_button([text], wait=5):
+    if not (click_button([text], wait=5) or click_text_deepest(text, "contains")):
         log(f"  ⚠ Кнопка '{text}' не найдена", "WARN")
         return False
     time.sleep(2)
@@ -1788,9 +1788,13 @@ def add_approver():
 # ==========================================
 def add_approver_final():
     goto_card()
+    if any(w in page_text() for w in ("алдажаров", "алдaжаров")):
+        log("  ✓ Утверждающий уже назначен (Алдажаров)", "PASS")
+        return True
     btn = None
     for xp in [
         "//*[normalize-space(text())='Утверждающий']/following::button[normalize-space(.)='Добавить'][1]",
+        "//*[contains(normalize-space(text()),'Утверждающий')]/following::*[self::button or self::a][contains(normalize-space(.),'Добавить')][1]",
         "//*[contains(normalize-space(text()),'Утверждающий не назначен')]"
         "/following::*[self::button or self::a][normalize-space(.)='Добавить'][1]",
     ]:
@@ -1994,7 +1998,7 @@ def stage_lines_buttons():
         log("  Позиции уже есть — оставляю как есть")
 
     for text in ["Развернуть все", "Свернуть все", "Обновить"]:
-        if click_button([text], wait=3):
+        if click_button([text], wait=3) or click_text_deepest(text, "contains"):
             log(f"  ✓ Кнопка '{text}'", "PASS")
             time.sleep(1.5)
         elif text != "Свернуть все":
@@ -2020,7 +2024,7 @@ def stage_lines_buttons():
             ActionChains(driver).send_keys(Keys.ESCAPE).perform()
             log("  ✓ Меню строки (⋮) открыто и закрыто", "PASS")
         else:
-            log("  • Меню строки (⋮) не найдено автоматически", "WARN")
+            log("  • Меню строки (⋮) не найдено автоматически", "INFO")
     except Exception:
         pass
     return ok

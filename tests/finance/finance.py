@@ -109,8 +109,8 @@ if is_headless():
 
 driver = None
 CURRENT_LOGIN = None
-DDS_LOGIN = env("RGB_ACCOUNT1_LOGIN", env("RGB_ACCOUNT3_LOGIN"))
-DDS_PASS = env("RGB_ACCOUNT1_PASSWORD", env("RGB_ACCOUNT3_PASSWORD"))
+DDS_LOGIN = env("RGB_ACCOUNT3_LOGIN", env("RGB_ACCOUNT1_LOGIN"))
+DDS_PASS = env("RGB_ACCOUNT3_PASSWORD", env("RGB_ACCOUNT1_PASSWORD"))
 
 
 def init_driver():
@@ -1362,7 +1362,7 @@ def stage_login():
     if is_login_page():
         return False
     if "finance" not in driver.current_url:
-        driver.get(CASHFLOW_URL)
+        nav_finance("ДДС", "finance/cashflow", CASHFLOW_URL)
         time.sleep(2)
     ok = "finance" in driver.current_url
     log(f"  URL после входа: {driver.current_url}", "PASS" if ok else "WARN")

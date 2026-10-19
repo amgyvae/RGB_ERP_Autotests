@@ -381,10 +381,13 @@ def _clean_reason(reason: str) -> str:
     if not reason:
         return ""
     cleaned = str(reason).split("Stacktrace:")[0]
-    cleaned = cleaned.split("; For documentation on this error")[0]
+    cleaned = cleaned.split("; For documentation")[0]
     cleaned = cleaned.split(" (Session info:")[0]
+    cleaned = re.sub(r"https?://\S+", "", cleaned)
     cleaned = cleaned.replace("Message: element click intercepted: ", "")
     cleaned = cleaned.replace("Message: ", "")
+    cleaned = re.sub(r"TimeoutException:\s*$", "Превышено время ожидания (таймаут)", cleaned)
+    cleaned = cleaned.strip().rstrip(":")
     return cleaned.strip()[:180]
 
 
