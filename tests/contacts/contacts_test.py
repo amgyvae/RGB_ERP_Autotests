@@ -97,15 +97,38 @@ class Contacts:
         self.waiter = WebDriverWait(driver, timeout, poll_frequency=.2)
         self.baseline = []
 
+    def dismiss_scrim_or_modal(self):
+        """Close any modal scrim or overlay that might intercept clicks."""
+        try:
+            self.d.execute_script("""
+                var scrims = document.querySelectorAll('button.ui-kit-modal__scrim, [aria-label="Закрыть"], .ui-modal__close');
+                for (var i = 0; i < scrims.length; i++) {
+                    var s = scrims[i];
+                    if (s.offsetWidth > 0 || s.offsetHeight > 0) {
+                        try { s.click(); } catch(e) {}
+                    }
+                }
+            """)
+        except Exception:
+            pass
+
+    def click_el(self, el):
+        self.d.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
+        self.dismiss_scrim_or_modal()
+        try:
+            el.click()
+        except Exception:
+            self.dismiss_scrim_or_modal()
+            self.d.execute_script("arguments[0].click();", el)
+
     def element(self, css):
         return self.waiter.until(lambda d: next((e for e in d.find_elements(self.By.CSS_SELECTOR, css) if e.is_displayed()), False))
 
     def click(self, css):
         el = self.element(css)
-        self.d.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
         if 'tasks-pagination' in (el.get_attribute('class') or ''):
             self.clear_pagination_overlay(el)
-        el.click()
+        self.click_el(el)
 
     def clear_pagination_overlay(self, button):
         """Collapse the assistant with its native control before pagination."""
@@ -177,7 +200,7 @@ return hit && arguments[0].contains(hit);
         buttons = self.d.find_elements(self.By.CSS_SELECTOR, selector)
         button = next(b for b in buttons if b.text.strip() == name)
         if button.get_attribute("aria-selected") != "true":
-            button.click()
+            self.click_el(button)
         return self.settled(lambda s: s[kind] == name)
 
     def query(self, value):
@@ -198,9 +221,9 @@ return hit && arguments[0].contains(hit);
             return current
         e = self.element('button[aria-label="Строк на странице"]')
         if e.text.strip() != str(n):
-            e.click()
+            self.click_el(e)
             option = self.waiter.until(lambda d: next((x for x in d.find_elements(self.By.CSS_SELECTOR, '[role="option"]') if x.is_displayed() and x.text.strip() == str(n)), False))
-            option.click()
+            self.click_el(option)
         return self.settled(lambda s: s['size'] == n)
 
     def nav(self, label):
@@ -269,6 +292,8 @@ return hit && arguments[0].contains(hit);
             p.send_keys(self.Keys.CONTROL,'a'); p.send_keys(password); p.send_keys(self.Keys.ENTER)
         self.element('input[aria-label="Поиск контактов"]')
         self.click('button.ui-sidebar__menu-button[aria-label="Контакты"]')
+        self.dismiss_scrim_or_modal()
+        time.sleep(0.5)
         self.settled()
         require('/contacts' in self.d.current_url, 'Не открыт раздел Контакты')
 
@@ -423,7 +448,7 @@ def main():
         from webdriver_manager.chrome import ChromeDriverManager
         options=Options(); options.add_argument('--start-maximized')
         options.add_experimental_option('prefs',{'credentials_enable_service':False,'profile.password_manager_enabled':False})
-        if args.headless or os.getenv('HEADLESS') == '1': options.add_argument('--headless=new'); options.add_argument('--window-size=1600,1000')
+        if args.headless or os.getenv('HEADLESS') == '1': options.add_argument('--headless=new'); options.add_argument('--window-size=1920,1080')
         driver=webdriver.Chrome(service=Service(ChromeDriverManager().install()),options=options)
         driver.implicitly_wait(0)
         print('[STEP 01/25] Открытие Контактов',flush=True)

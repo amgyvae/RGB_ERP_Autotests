@@ -1406,10 +1406,16 @@ def stage_login():
     if is_login_page():
         if not login_with(login_val, pass_val):
             return False
-    driver.get(PROJECTS_URL)
-    wait_for_state(lambda: is_login_page() or passport_list_ready())
+    time.sleep(2)
+    if "/projects" not in driver.current_url:
+        driver.get(PROJECTS_URL)
+        time.sleep(2)
+    wait_for_state(lambda: is_login_page() or passport_list_ready(), timeout=25)
     if is_login_page():
         return False
+    if "/projects" not in driver.current_url:
+        driver.get(PROJECTS_URL)
+        time.sleep(2)
     ok = "/projects" in driver.current_url
     log(f"  URL: {driver.current_url}", "PASS" if ok else "WARN")
     return ok
@@ -2023,7 +2029,7 @@ def run():
     log("=" * 60)
     try:
         init_driver()
-        driver.get(BASE_URL)
+        driver.get(PROJECTS_URL)
         wait_for_state(lambda: is_login_page() or passport_list_ready())
         if not step("Вход и открытие «Паспорта проектов»", stage_login):
             return

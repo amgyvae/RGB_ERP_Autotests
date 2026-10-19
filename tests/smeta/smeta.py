@@ -105,9 +105,9 @@ def init_driver():
 login_val = env("RGB_ACCOUNT1_LOGIN", env("RGB_ACCOUNT3_LOGIN"))
 pass_val = env("RGB_ACCOUNT1_PASSWORD", env("RGB_ACCOUNT3_PASSWORD"))
 
-# Утверждающий / подписант 
-SECOND_LOGIN = env("RGB_ACCOUNT2_LOGIN", env("RGB_ACCOUNT1_LOGIN"))
-SECOND_PASS = env("RGB_ACCOUNT2_PASSWORD", env("RGB_ACCOUNT1_PASSWORD_ALT"))
+# Утверждающий / подписант (Талгат Ерланович)
+SECOND_LOGIN = env("RGB_ACCOUNT3_LOGIN", env("RGB_ACCOUNT1_LOGIN"))
+SECOND_PASS = env("RGB_ACCOUNT3_PASSWORD", env("RGB_ACCOUNT1_PASSWORD_ALT"))
 
 BASE_URL = "https://testportal.rgbgroup.kz/"
 ESTIMATES_URL = BASE_URL + "estimates"
@@ -2291,7 +2291,7 @@ def run():
     log("=" * 60)
     try:
         init_driver()
-        driver.get(BASE_URL)
+        driver.get(ESTIMATES_URL)
         if not step("Смета: Вход и открытие раздела «Смета»", stage_login):
             return
         step("Смета: Страница «Сметы проектов»: фильтры, поиск, проект", stage_list_page)

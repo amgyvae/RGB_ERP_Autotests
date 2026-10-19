@@ -34,21 +34,31 @@ def _normalize_text(value):
 
 def _load_credentials():
     raw_json = env("GOOGLE_SERVICE_ACCOUNT_JSON", "-")
-    if raw_json != "-":
-        return Credentials.from_service_account_info(json.loads(raw_json), scopes=SCOPES)
+    if raw_json != "-" and raw_json.strip():
+        try:
+            return Credentials.from_service_account_info(json.loads(raw_json), scopes=SCOPES)
+        except Exception as e:
+            print(f"[sheet_reporter] Ошибка парсинга GOOGLE_SERVICE_ACCOUNT_JSON: {e}")
+            return None
     path = CREDS_PATH
     if not os.path.isabs(path):
         path = str(ROOT_DIR / path)
+    if not os.path.isfile(path):
+        return None
     return Credentials.from_service_account_file(path, scopes=SCOPES)
 
 
 def _connect_with_retry(max_attempts=4):
-    """Подключение с повтором при 429 (Quota exceeded) — на случай,
-    если лимит всё же исчерпан (например, несколько скриптов пишут
-    в таблицу почти одновременно)."""
+    """Подключение с повтором при 429 (Quota exceeded)."""
+    creds = _load_credentials()
+    if creds is None:
+        print("[sheet_reporter] Учетные данные Google Sheets не найдены (пропуск записи).")
+        return None
+    if not SPREADSHEET_ID:
+        print("[sheet_reporter] GOOGLE_SPREADSHEET_ID не задан (пропуск записи).")
+        return None
     for attempt in range(max_attempts):
         try:
-            creds = _load_credentials()
             client = gspread.authorize(creds)
             return client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME)
         except gspread.exceptions.APIError as e:
@@ -156,6 +166,8 @@ def report_result(task_name: str, passed: bool, row_range=None):
     print(f"[sheet_reporter] Ищу задачу: '{task_name}'" +
           (f" (строки {row_range[0]}-{row_range[1]})" if row_range else ""))
     ws = _connect()
+    if ws is None:
+        return
 
     row = _find_row_by_task(ws, task_name, row_range=row_range)
     if row is None:
@@ -186,6 +198,8 @@ def report_results(findings, row_range=None):
         return
 
     ws = _connect()
+    if ws is None:
+        return
     tasks_column = ws.col_values(COL_TASK)          # 1 запрос на чтение (а не N)
     header_values = ws.row_values(HEADER_ROW)        # 1 запрос на чтение (а не N)
 

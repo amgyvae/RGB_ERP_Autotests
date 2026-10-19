@@ -377,27 +377,53 @@ def run_and_collect(script_path: str, task_map: dict, result_format="standard", 
     return findings, reasons
 
 
+def _clean_reason(reason: str) -> str:
+    if not reason:
+        return ""
+    cleaned = str(reason).split("Stacktrace:")[0]
+    cleaned = cleaned.split("; For documentation on this error")[0]
+    cleaned = cleaned.split(" (Session info:")[0]
+    cleaned = cleaned.replace("Message: element click intercepted: ", "")
+    cleaned = cleaned.replace("Message: ", "")
+    return cleaned.strip()[:180]
+
+
 def send_telegram_summary(script_name: str, findings: list, reasons: dict,
                           *, skipped=(), error="", sheet_error="", screenshot=None):
     """Common summary and delivery for workflow modules, including Finance."""
     module_label = MODULE_LABELS.get(os.path.basename(script_name), script_name)
+    total_checks = len(findings) + len(skipped)
+    passed_checks = sum(bool(ok) for _, ok in findings)
     failed_items = [(name, reasons.get(name)) for name, ok in findings if not ok]
-    if findings and not failed_items and not skipped and not error and not sheet_error:
-        tg_send(f"✅ <b>Автотест: {escape(module_label)} — УСПЕШНО</b>")
+
+    if findings and not failed_items and not skipped and not error and (not sheet_error or sheet_error == "FileNotFoundError"):
+        tg_send(f"✅ <b>Автотест: {escape(module_label)} — УСПЕШНО</b> ({passed_checks}/{total_checks})")
         return
-    passed = sum(bool(ok) for _, ok in findings)
-    emoji = "🔥" if not passed else "⚠️"
-    lines = [f"{emoji} <b>Автотест: {escape(module_label)} — ЕСТЬ ОШИБКИ</b>", ""]
+
+    emoji = "🔥" if (failed_items or error) else "⚠️"
+    title = "ЕСТЬ ОШИБКИ" if (failed_items or error) else "ВЫПОЛНЕН НЕ ПОЛНОСТЬЮ"
+    lines = [f"{emoji} <b>Автотест: {escape(module_label)} — {title}</b> ({passed_checks}/{total_checks} успешно)", ""]
+
     for name, reason in failed_items:
-        lines.append("❌ " + escape(name) + (" — " + escape(reason) if reason else ""))
+        clean = _clean_reason(reason)
+        lines.append("❌ " + escape(name) + (" — " + escape(clean) if clean else ""))
+
     if error:
-        lines.append("❌ Ошибка запуска — " + escape(error[:500]))
-    if sheet_error:
-        lines.append("⚠️ Результаты не записаны в Google Sheets — " + escape(sheet_error[:500]))
-    for name in skipped:
-        lines.append("⏭ Не выполнено: " + escape(name))
-    if not findings:
+        lines.append("❌ Ошибка запуска — " + escape(_clean_reason(error)))
+
+    if sheet_error and sheet_error != "FileNotFoundError":
+        lines.append("⚠️ Google Sheets: " + escape(_clean_reason(sheet_error)))
+
+    if skipped:
+        if len(skipped) > 3:
+            lines.append(f"⏭ Пропущено этапов: {len(skipped)} (прервано из-за ошибки выше)")
+        else:
+            for name in skipped:
+                lines.append("⏭ Не выполнено: " + escape(name))
+
+    if not findings and not skipped and not error:
         lines.append("Нет результатов выполненных проверок. Подробности в локальном логе.")
+
     current = ""
     for line in lines:
         if len(current) + len(line) + 1 > 3800:
@@ -406,8 +432,8 @@ def send_telegram_summary(script_name: str, findings: list, reasons: dict,
         current += ("\n" if current else "") + line
     if current:
         tg_send(current)
+
     # Finance passes a screenshot from the current run explicitly.
-    # Existing workflow calls retain the previous screenshot lookup.
     if failed_items or error:
         if screenshot is None:
             script_dir = os.path.dirname(os.path.abspath(script_name)) or "."
@@ -460,21 +486,32 @@ def contacts_findings_for_sheet(results, script_path=None):
 
 def contacts_summary(results, script_path=None):
     checks = contacts_checks(script_path)
+    total_count = len(results)
+    passed_count = sum(1 for r in results if r['status'] == 'PASS')
     failed = [r for r in results if r['status'] == 'FAIL']
     skipped = [r for r in results if r['status'] == 'SKIP']
-    if not failed and (not skipped):
-        return ['✅ <b>Автотест: Контакты — УСПЕШНО</b>']
-    icon = '🔥' if all((r['status'] == 'FAIL' for r in results)) else '⚠️'
+
+    if not failed and not skipped:
+        return [f"✅ <b>Автотест: Контакты — УСПЕШНО</b> ({passed_count}/{total_count})"]
+
+    icon = '🔥' if failed else '⚠️'
     title = 'ЕСТЬ ОШИБКИ' if failed else 'ВЫПОЛНЕН НЕ ПОЛНОСТЬЮ'
-    header = f'{icon} <b>Автотест: Контакты — {title}</b>'
-    parts = [header]
-    for r in failed + skipped:
-        prefix = '❌' if r['status'] == 'FAIL' else '⏭ Не выполнено:'
-        line = f"{prefix} {escape(checks[r['id'] - 1]['name'])} — {escape(r.get('reason', '')[:500])}"
-        if len(parts[-1]) + len(line) > 3400:
-            parts.append('<b>Контакты — продолжение отчёта</b>')
-        parts[-1] += '\n' + line
-    return parts
+    lines = [f"{icon} <b>Автотест: Контакты — {title}</b> ({passed_count}/{total_count} успешно)", ""]
+
+    for r in failed:
+        reason = _clean_reason(r.get('reason', ''))
+        lines.append(f"❌ {escape(checks[r['id'] - 1]['name'])}" + (f" — {escape(reason)}" if reason else ""))
+
+    if skipped:
+        if len(skipped) > 3:
+            sample_reason = _clean_reason(skipped[0].get('reason', ''))
+            lines.append(f"⏭ Пропущено проверок: {len(skipped)}" + (f" ({escape(sample_reason)})" if sample_reason else ""))
+        else:
+            for r in skipped:
+                reason = _clean_reason(r.get('reason', ''))
+                lines.append(f"⏭ Пропущено: {escape(checks[r['id'] - 1]['name'])}" + (f" — {escape(reason)}" if reason else ""))
+
+    return ["\n".join(lines)]
 
 def contacts_current_screenshot(results, run_id):
     root = (SCREENS_DIR / 'contacts' / run_id).resolve()

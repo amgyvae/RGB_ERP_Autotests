@@ -109,8 +109,8 @@ if is_headless():
 
 driver = None
 CURRENT_LOGIN = None
-DDS_LOGIN = env("RGB_ACCOUNT3_LOGIN")
-DDS_PASS = env("RGB_ACCOUNT3_PASSWORD")
+DDS_LOGIN = env("RGB_ACCOUNT1_LOGIN", env("RGB_ACCOUNT3_LOGIN"))
+DDS_PASS = env("RGB_ACCOUNT1_PASSWORD", env("RGB_ACCOUNT3_PASSWORD"))
 
 
 def init_driver():
@@ -120,12 +120,13 @@ def init_driver():
     driver.implicitly_wait(0)
 
 
-login_val = env("RGB_ACCOUNT1_LOGIN", env("RGB_ACCOUNT2_LOGIN"))
-pass_val = env("RGB_ACCOUNT1_PASSWORD", env("RGB_ACCOUNT2_PASSWORD"))
+# Согласующий (Ерлан Талгатович)
+login_val = env("RGB_ACCOUNT2_LOGIN", env("RGB_ACCOUNT1_LOGIN"))
+pass_val = env("RGB_ACCOUNT2_PASSWORD", env("RGB_ACCOUNT1_PASSWORD"))
 
-# Утверждающий / подписант 
-SECOND_LOGIN = env("RGB_ACCOUNT2_LOGIN", env("RGB_ACCOUNT1_LOGIN"))
-SECOND_PASS = env("RGB_ACCOUNT2_PASSWORD", env("RGB_ACCOUNT1_PASSWORD_ALT"))
+# Утверждающий (Талгат Ерланович) 
+SECOND_LOGIN = env("RGB_ACCOUNT3_LOGIN", env("RGB_ACCOUNT1_LOGIN"))
+SECOND_PASS = env("RGB_ACCOUNT3_PASSWORD", env("RGB_ACCOUNT1_PASSWORD_ALT"))
 
 BASE_URL = "https://testportal.rgbgroup.kz/"
 CASHFLOW_URL = BASE_URL + "finance/cashflow"
@@ -1351,12 +1352,18 @@ def stage_login():
     if is_login_page():
         if not login_with(DDS_LOGIN, DDS_PASS):
             return False
-    driver.get(CASHFLOW_URL)
-    wait_for_state(lambda: is_login_page() or bool(find_buttons(["Запросить"])))
+    time.sleep(2)
+    dismiss_news_popup(wait=2)
+    if "finance" not in driver.current_url:
+        driver.get(CASHFLOW_URL)
+        time.sleep(2)
+    wait_for_state(lambda: is_login_page() or bool(find_buttons(["Запросить"])), timeout=25)
+    dismiss_news_popup(wait=1)
     if is_login_page():
         return False
-    if not dismiss_news_popup(wait=1):
-        return False
+    if "finance" not in driver.current_url:
+        driver.get(CASHFLOW_URL)
+        time.sleep(2)
     ok = "finance" in driver.current_url
     log(f"  URL после входа: {driver.current_url}", "PASS" if ok else "WARN")
     return ok
@@ -2666,7 +2673,7 @@ def run():
     log("=" * 60)
     try:
         init_driver()
-        driver.get(BASE_URL)
+        driver.get(CASHFLOW_URL)
         if not step("Вход и открытие раздела «Финансы»", stage_login):
             return
         # ---------- ДДС ----------
