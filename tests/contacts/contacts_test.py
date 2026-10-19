@@ -82,9 +82,9 @@ def credentials():
     # Тот же аккаунт, что использует gpr_test.py (значения — из .env / GitHub Secrets).
     from env_config import env
     login = login or env("RGB_ACCOUNT1_LOGIN")
-    password = password or env("RGB_ACCOUNT1_PASSWORD_ALT")
+    password = password or env("RGB_ACCOUNT1_PASSWORD") or env("RGB_ACCOUNT1_PASSWORD_ALT")
     if not login or not password:
-        raise MissingData("Нет RGB_LOGIN/RGB_PASSWORD или RGB_ACCOUNT1_LOGIN/RGB_ACCOUNT1_PASSWORD_ALT в .env")
+        raise MissingData("Нет RGB_LOGIN/RGB_PASSWORD или RGB_ACCOUNT1_LOGIN/RGB_ACCOUNT1_PASSWORD в .env")
     return login, password
 
 
@@ -101,7 +101,7 @@ class Contacts:
         """Close any modal scrim or overlay that might intercept clicks."""
         try:
             self.d.execute_script("""
-                var scrims = document.querySelectorAll('button.ui-kit-modal__scrim, [aria-label="Закрыть"], .ui-modal__close');
+                var scrims = document.querySelectorAll('button.ui-kit-modal__scrim, [aria-label="Закрыть"], .ui-modal__close, [class*=modal__close], [class*=dialog__close]');
                 for (var i = 0; i < scrims.length; i++) {
                     var s = scrims[i];
                     if (s.offsetWidth > 0 || s.offsetHeight > 0) {
@@ -111,6 +111,29 @@ class Contacts:
             """)
         except Exception:
             pass
+
+    def dismiss_news_popup(self, wait=2):
+        """Close news popup or scrim modals."""
+        deadline = time.monotonic() + wait
+        while True:
+            try:
+                for btn in self.d.find_elements(self.By.XPATH,
+                        "//*[contains(normalize-space(text()),'Новые новости')]/ancestor::*[@role='dialog' or @aria-modal='true']//button | "
+                        "//div[contains(@class,'ui-kit-modal')]//button[contains(.,'Закрыть') or @aria-label='Закрыть'] | "
+                        "//button[contains(@class,'ui-kit-modal__scrim')]"):
+                    if btn.is_displayed():
+                        try:
+                            self.d.execute_script("arguments[0].click();", btn)
+                            time.sleep(0.3)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+            if not any(e.is_displayed() for e in self.d.find_elements(self.By.CSS_SELECTOR, "button.ui-kit-modal__scrim")):
+                break
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(0.2)
 
     def click_el(self, el):
         self.d.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
@@ -290,8 +313,14 @@ return hit && arguments[0].contains(hit);
             e.send_keys(self.Keys.CONTROL,'a'); e.send_keys(login)
             p = self.element('input[type="password"]')
             p.send_keys(self.Keys.CONTROL,'a'); p.send_keys(password); p.send_keys(self.Keys.ENTER)
+            time.sleep(2)
+        self.dismiss_news_popup(wait=3)
+        self.dismiss_scrim_or_modal()
+        if '/contacts' not in self.d.current_url:
+            self.d.get(URL)
+            time.sleep(2)
+            self.dismiss_news_popup(wait=2)
         self.element('input[aria-label="Поиск контактов"]')
-        self.click('button.ui-sidebar__menu-button[aria-label="Контакты"]')
         self.dismiss_scrim_or_modal()
         time.sleep(0.5)
         self.settled()
@@ -470,10 +499,12 @@ def main():
             except Exception as e: record(number,'FAIL',f'{view}: {type(e).__name__}: {str(e).split("Stacktrace:")[0][:700]}',shot(number))
             finally: print(f'[TIME {number:02d}] {time.monotonic()-started:.1f} сек.',flush=True)
     except Exception as e:
-        if not results: record(1,'FAIL',type(e).__name__+': '+str(e).split('Stacktrace:')[0][:700],shot(1))
+        err_clean = str(e).split('Stacktrace:')[0].split('; For documentation')[0].split('(Session info:')[0]
+        err_clean = err_clean.replace('Message: element click intercepted: ', '').replace('Message: ', '').strip()[:140]
+        if not results: record(1,'FAIL',err_clean,shot(1))
         done={r['id'] for r in results}
         for n in range(1,26):
-            if n not in done: record(n,'SKIP','Предусловие не выполнено: '+str(e).split('Stacktrace:')[0][:500])
+            if n not in done: record(n,'SKIP',f'Предусловие не выполнено: {err_clean}')
     finally:
         if driver:
             try: driver.quit()

@@ -1088,9 +1088,8 @@ def goto_card():
     url = STATE["url"]
     if not url:
         return False
-    cur = driver.current_url
-    if "/lines" in cur or url not in cur:
-        driver.get(url)
+    driver.get(url)
+    time.sleep(1.5)
     return bool(wait_for_state(smeta_card_ready))
 
 
@@ -1418,21 +1417,27 @@ def negative_close(modal, hint):
     return False
 
 
-def negative_project_control(modal):
-    # Prefer the rendered project placeholder; a broad following:: selector
-    # can resolve a neighbouring control or hidden dropdown content.
+def negative_project_control(modal, wait=6):
+    deadline = time.monotonic() + wait
     placeholders = ('выбрать проект', 'выберите проект')
-    for element in modal.find_elements(By.XPATH,
-            ".//button | .//*[@role='combobox']"):
-        if element.is_displayed():
+    while True:
+        for element in modal.find_elements(By.XPATH,
+                ".//button | .//*[@role='combobox']"):
+            if element.is_displayed():
+                text = ' '.join((element.text or element.get_attribute('innerText') or '').split()).lower()
+                if 'загруз' not in text and text in placeholders:
+                    return element, text
+        element = control_by_label(modal, 'Проект')
+        if element is not None:
             text = ' '.join((element.text or element.get_attribute('innerText') or '').split()).lower()
-            if text in placeholders:
+            if 'загруз' not in text:
                 return element, text
-    element = control_by_label(modal, 'Проект')
-    if element is None:
-        return None, ''
-    text = ' '.join((element.text or element.get_attribute('innerText') or '').split()).lower()
-    return element, text
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.3)
+    elem = control_by_label(modal, 'Проект')
+    txt = ' '.join((elem.text or elem.get_attribute('innerText') or '').split()).lower() if elem else ''
+    return elem, txt
 
 
 def negative_create_case(case):
