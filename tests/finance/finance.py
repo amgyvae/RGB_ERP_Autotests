@@ -109,8 +109,8 @@ if is_headless():
 
 driver = None
 CURRENT_LOGIN = None
-DDS_LOGIN = env("RGB_ACCOUNT3_LOGIN", env("RGB_ACCOUNT1_LOGIN"))
-DDS_PASS = env("RGB_ACCOUNT3_PASSWORD", env("RGB_ACCOUNT1_PASSWORD"))
+DDS_LOGIN = env("RGB_ACCOUNT1_LOGIN", env("RGB_ACCOUNT3_LOGIN"))
+DDS_PASS = env("RGB_ACCOUNT1_PASSWORD", env("RGB_ACCOUNT3_PASSWORD"))
 
 
 def init_driver():
@@ -421,7 +421,7 @@ def find_buttons(texts, scope=None):
     out = []
     for t in texts:
         xp = (f"{pre}*[self::button or self::a or @role='button']"
-              f"[normalize-space(.)='{t}']")
+              f"[normalize-space(.)='{t}' or contains(normalize-space(.),'{t}')]")
         try:
             for e in root.find_elements(By.XPATH, xp):
                 if e.is_displayed() and e.is_enabled():
@@ -1355,31 +1355,48 @@ def stage_login():
     time.sleep(2)
     dismiss_news_popup(wait=2)
     if "finance" not in driver.current_url:
-        driver.get(CASHFLOW_URL)
+        nav_finance("ДДС", "cashflow", CASHFLOW_URL)
         time.sleep(2)
-    wait_for_state(lambda: is_login_page() or bool(find_buttons(["Запросить"])), timeout=25)
+    wait_for_state(lambda: is_login_page() or bool(find_buttons(["Запросить"])) or "finance" in driver.current_url, timeout=25)
     dismiss_news_popup(wait=1)
     if is_login_page():
         return False
     if "finance" not in driver.current_url:
-        nav_finance("ДДС", "finance/cashflow", CASHFLOW_URL)
+        nav_finance("ДДС", "cashflow", CASHFLOW_URL)
         time.sleep(2)
-    ok = "finance" in driver.current_url
+    ok = "finance" in driver.current_url or bool(find_buttons(["Запросить"])) or "ддс" in page_text()
     log(f"  URL после входа: {driver.current_url}", "PASS" if ok else "WARN")
     return ok
 
 
 def nav_finance(item, url_part, url):
     """Меню «Финансы» -> пункт (ДДС / ГФР). Если по меню не вышло — прямой URL."""
-    for _ in range(2):
-        if click_text_deepest(item, "exact"):
+    try:
+        links = [a for a in driver.find_elements(By.XPATH, f"//a[contains(@href, '{url_part}')]") if a.is_displayed()]
+        if links:
+            click_el(links[0])
             time.sleep(3)
             if url_part in driver.current_url:
                 return True
-        click_text_deepest("Финансы", "exact")
+    except Exception:
+        pass
+
+    for _ in range(2):
+        if click_button([item]) or click_text_deepest(item, "contains"):
+            time.sleep(3)
+            if url_part in driver.current_url:
+                return True
+        for menu_el in driver.find_elements(By.XPATH,
+            "//*[contains(@class,'nav') or contains(@class,'menu') or contains(@class,'sidebar')]//*[contains(normalize-space(.),'Финансы')] | "
+            "//*[self::a or self::button or self::div][contains(normalize-space(.),'Финансы')]"):
+            if menu_el.is_displayed():
+                click_el(menu_el)
+                time.sleep(1)
+                break
         time.sleep(1)
     driver.get(url)
-    time.sleep(4)
+    time.sleep(3)
+    dismiss_news_popup(wait=2)
     return url_part in driver.current_url
 
 

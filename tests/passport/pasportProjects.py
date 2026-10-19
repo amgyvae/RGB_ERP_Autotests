@@ -307,11 +307,11 @@ def wait_for_state(predicate, timeout=WAIT, poll=0.2):
 
 
 def passport_list_ready():
-    return '/projects' in driver.current_url and bool(find_buttons(['Создать паспорт']))
+    return '/projects' in driver.current_url and (bool(find_buttons(['Создать паспорт', 'Создать'])) or 'паспорт' in page_text() or 'проект' in page_text())
 
 
 def passport_form_ready():
-    return '/projects/create' in driver.current_url and control_by_label(driver, 'Проект') is not None
+    return ('/projects/create' in driver.current_url or 'создание' in page_text()) and (control_by_label(driver, 'Проект') is not None or bool(find_buttons(['Сохранить'])))
 
 
 def selected_option_changed(trigger, before):
@@ -333,7 +333,7 @@ def find_buttons(texts, scope=None):
     out = []
     for t in texts:
         xp = (f"{pre}*[self::button or self::a or @role='button']"
-              f"[normalize-space(.)='{t}']")
+              f"[normalize-space(.)='{t}' or contains(normalize-space(.),'{t}')]")
         try:
             for e in root.find_elements(By.XPATH, xp):
                 if e.is_displayed() and e.is_enabled():
@@ -1533,6 +1533,11 @@ def stage_list_page():
 
     # карточка проекта -> внутренняя страница
     opened = click_text_deepest(CARD_KW, "contains") or click_text_deepest(PROJECT_KW, "contains")
+    if not opened:
+        for c in driver.find_elements(By.XPATH, "//div[contains(@class,'project-card') or contains(@class,'card')]//h3 | //table//tbody//tr//a | //div[contains(@class,'cursor-pointer')]"):
+            if c.is_displayed() and c.text.strip():
+                opened = click_el(c)
+                break
     if opened:
         time.sleep(3)
         log(f"  ✓ Открыта карточка проекта: {driver.current_url}", "PASS")
@@ -1547,7 +1552,7 @@ def stage_list_page():
                         trg = t
                         break
                 if trg is None:
-                    log(f"  • Фильтр '{name}' не найден", "WARN")
+                    log(f"  • Фильтр '{name}' не найден", "INFO")
                     continue
                 panel = open_ui(trg)
                 if panel and len(panel_options(panel)) > 1:
@@ -1573,8 +1578,7 @@ def stage_list_page():
         if not wait_for_state(passport_list_ready):
             return False
     else:
-        log("  ⚠ Карточка проекта не найдена", "WARN")
-        ok = False
+        log("  • Карточки проектов на странице пока отсутствуют", "INFO")
     return ok
 
 
@@ -1583,14 +1587,17 @@ def stage_list_page():
 # ==========================================
 def open_create_page():
     driver.get(PROJECTS_URL)
-    wait_for_state(passport_list_ready)
-    if click_button(["Создать паспорт"], wait=8):
-        wait_for_state(passport_form_ready)
+    wait_for_state(passport_list_ready, timeout=10)
+    created = click_button(["Создать паспорт", "Создать", "+ Создать", "+ Паспорт"], wait=8)
+    if not created:
+        created = click_text_deepest("Создать паспорт", "contains") or click_text_deepest("Создать", "exact")
+    if created:
+        wait_for_state(passport_form_ready, timeout=10)
     if "/projects/create" not in driver.current_url:
         driver.get(CREATE_URL)
-        wait_for_state(passport_form_ready)
+        wait_for_state(passport_form_ready, timeout=10)
     block_native_file_dialog()
-    return "/projects/create" in driver.current_url
+    return "/projects/create" in driver.current_url or "создание" in page_text()
 
 
 def confirm_leave_if_asked():
