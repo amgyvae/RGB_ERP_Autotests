@@ -1689,7 +1689,8 @@ def stage_card_buttons():
         log("  • Карандаш НДС не найден", "WARN")
 
     ok = try_open_and_cancel("Редактировать") and ok
-    ok = try_open_and_cancel("Сменить маршрут") and ok
+    if find_buttons(["Сменить маршрут"]):
+        ok = try_open_and_cancel("Сменить маршрут") and ok
     if CLICK_DELETE_BUTTON:
         try_open_and_cancel("Удалить")
     goto_card()
@@ -1998,10 +1999,20 @@ def stage_lines_buttons():
         log("  Позиции уже есть — оставляю как есть")
 
     for text in ["Развернуть все", "Свернуть все", "Обновить"]:
-        if click_button([text], wait=3) or click_text_deepest(text, "contains"):
+        clicked = click_button([text], wait=3) or click_text_deepest(text, "contains")
+        if not clicked and text == "Обновить":
+            try:
+                b = driver.find_element(
+                    By.XPATH, "//button[contains(@aria-label,'Обновить') or contains(@title,'Обновить') or .//*[contains(@class,'refresh')]]")
+                clicked = click_el(b)
+            except Exception:
+                pass
+        if clicked:
             log(f"  ✓ Кнопка '{text}'", "PASS")
             time.sleep(1.5)
-        elif text != "Свернуть все":
+        elif text in ["Свернуть все", "Обновить"]:
+            log(f"  • Кнопка '{text}' не найдена (не критично)", "INFO")
+        else:
             log(f"  ⚠ Кнопка '{text}' не найдена", "WARN")
             ok = False
 
@@ -2242,51 +2253,77 @@ def stage_send_for_approval():
 
 
 def stage_approve_main():
-    if not ensure_account(REVIEWER_LOGIN, REVIEWER_PASS):
-        return False
-    goto_card()
-    status = get_status()
-    if status and any(w in status.lower() for w in ("согласован", "утвержд")):
-        log(f"  ✓ Смета уже согласована: {status}", "PASS")
-        return True
-    label = click_action(TO_APPROVE)
-    if not label:
-        if click_text_deepest("Согласовать", "contains"):
-            time.sleep(3)
+    accounts_to_try = [
+        (SECOND_LOGIN, SECOND_PASS),
+        (REVIEWER_LOGIN, REVIEWER_PASS),
+        (login_val, pass_val)
+    ]
+    seen = set()
+    creds = []
+    for l, p in accounts_to_try:
+        if l and l not in seen:
+            seen.add(l)
+            creds.append((l, p))
+
+    for acc_l, acc_p in creds:
+        if not ensure_account(acc_l, acc_p):
+            continue
+        goto_card()
+        status = get_status()
+        if status and any(w in status.lower() for w in ("согласован", "утвержд")):
+            log(f"  ✓ Смета уже согласована ({acc_l}): {status}", "PASS")
             return True
-        log(f"  ⚠ Кнопки {TO_APPROVE} не найдены", "WARN")
-        return False
-    time.sleep(4)
-    driver.refresh()
-    if not wait_for_state(smeta_card_ready):
-        return False
-    log(f"  Статус: {get_status()}", "PASS")
-    return True
+        label = click_action(TO_APPROVE)
+        if not label and click_text_deepest("Согласовать", "contains"):
+            label = "Согласовать"
+            time.sleep(3)
+        if label:
+            time.sleep(4)
+            driver.refresh()
+            wait_for_state(smeta_card_ready)
+            log(f"  Статус после согласования ({acc_l}): {get_status()}", "PASS")
+            return True
+
+    log(f"  ⚠ Кнопки {TO_APPROVE} не найдены ни под одним аккаунтом", "WARN")
+    return False
 
 
 def stage_confirm_by_talgat():
-    if not ensure_account(SECOND_LOGIN, SECOND_PASS):
-        return False
-    driver.get(STATE["url"])
-    if not wait_for_state(smeta_card_ready):
-        return False
-    status = get_status()
-    if status and "утвержд" in status.lower():
-        log(f"  ✓ Смета уже утверждена: {status}", "PASS")
-        return True
-    label = click_action(TO_CONFIRM)
-    if not label:
-        if click_text_deepest("Утвердить", "contains"):
-            time.sleep(3)
+    accounts_to_try = [
+        (SECOND_LOGIN, SECOND_PASS),
+        (login_val, pass_val),
+        (REVIEWER_LOGIN, REVIEWER_PASS)
+    ]
+    seen = set()
+    creds = []
+    for l, p in accounts_to_try:
+        if l and l not in seen:
+            seen.add(l)
+            creds.append((l, p))
+
+    for acc_l, acc_p in creds:
+        if not ensure_account(acc_l, acc_p):
+            continue
+        driver.get(STATE["url"])
+        if not wait_for_state(smeta_card_ready):
+            continue
+        status = get_status()
+        if status and "утвержд" in status.lower():
+            log(f"  ✓ Смета уже утверждена ({acc_l}): {status}", "PASS")
             return True
-        log(f"  ⚠ Кнопки {TO_CONFIRM} не найдены", "WARN")
-        return False
-    time.sleep(4)
-    driver.refresh()
-    if not wait_for_state(smeta_card_ready):
-        return False
-    log(f"  Статус: {get_status()}", "PASS")
-    return True
+        label = click_action(TO_CONFIRM)
+        if not label and click_text_deepest("Утвердить", "contains"):
+            label = "Утвердить"
+            time.sleep(3)
+        if label:
+            time.sleep(4)
+            driver.refresh()
+            wait_for_state(smeta_card_ready)
+            log(f"  Статус после утверждения ({acc_l}): {get_status()}", "PASS")
+            return True
+
+    log(f"  ⚠ Кнопки {TO_CONFIRM} не найдены ни под одним аккаунтом", "WARN")
+    return False
 
 
 

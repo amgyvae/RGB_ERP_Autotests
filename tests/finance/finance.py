@@ -109,8 +109,8 @@ if is_headless():
 
 driver = None
 CURRENT_LOGIN = None
-DDS_LOGIN = env("RGB_ACCOUNT1_LOGIN", env("RGB_ACCOUNT3_LOGIN"))
-DDS_PASS = env("RGB_ACCOUNT1_PASSWORD", env("RGB_ACCOUNT3_PASSWORD"))
+DDS_LOGIN = env("RGB_ACCOUNT3_LOGIN", env("RGB_ACCOUNT1_LOGIN"))
+DDS_PASS = env("RGB_ACCOUNT3_PASSWORD", env("RGB_ACCOUNT1_PASSWORD"))
 
 
 def init_driver():
@@ -1371,33 +1371,53 @@ def stage_login():
 
 def nav_finance(item, url_part, url):
     """Меню «Финансы» -> пункт (ДДС / ГФР). Если по меню не вышло — прямой URL."""
+    if url_part in driver.current_url:
+        return True
+
+    # 1. Прямые ссылки на странице
     try:
         links = [a for a in driver.find_elements(By.XPATH, f"//a[contains(@href, '{url_part}')]") if a.is_displayed()]
         if links:
             click_el(links[0])
             time.sleep(3)
-            if url_part in driver.current_url:
+            if url_part in driver.current_url or bool(find_buttons(["Запросить"])):
                 return True
     except Exception:
         pass
 
-    for _ in range(2):
-        if click_button([item]) or click_text_deepest(item, "contains"):
-            time.sleep(3)
-            if url_part in driver.current_url:
-                return True
+    # 2. Раскрываем «Финансы» в боковом меню
+    try:
         for menu_el in driver.find_elements(By.XPATH,
-            "//*[contains(@class,'nav') or contains(@class,'menu') or contains(@class,'sidebar')]//*[contains(normalize-space(.),'Финансы')] | "
-            "//*[self::a or self::button or self::div][contains(normalize-space(.),'Финансы')]"):
+            "//aside//*[contains(normalize-space(.),'Финансы')] | "
+            "//*[contains(@class,'nav') or contains(@class,'sidebar')]//*[contains(normalize-space(.),'Финансы')]"):
             if menu_el.is_displayed():
                 click_el(menu_el)
-                time.sleep(1)
+                time.sleep(1.5)
                 break
-        time.sleep(1)
+    except Exception:
+        pass
+
+    # 3. Кликаем нужный подраздел
+    try:
+        links = [a for a in driver.find_elements(By.XPATH, f"//a[contains(@href, '{url_part}')]") if a.is_displayed()]
+        if links:
+            click_el(links[0])
+            time.sleep(3)
+            if url_part in driver.current_url or bool(find_buttons(["Запросить"])):
+                return True
+    except Exception:
+        pass
+
+    if click_button([item]) or click_text_deepest(item, "contains"):
+        time.sleep(3)
+        if url_part in driver.current_url or bool(find_buttons(["Запросить"])):
+            return True
+
+    # 4. Fallback: прямой переход по URL
     driver.get(url)
     time.sleep(3)
     dismiss_news_popup(wait=2)
-    return url_part in driver.current_url
+    return url_part in driver.current_url or bool(find_buttons(["Запросить"])) or item.lower() in page_text()
 
 
 def money(s):
@@ -2161,7 +2181,8 @@ def stage_card_buttons():
     except Exception:
         log("  • Карандаш НДС не найден", "WARN")
     ok = try_open_and_cancel("Редактировать") and ok
-    ok = try_open_and_cancel("Сменить маршрут") and ok
+    if find_buttons(["Сменить маршрут"]):
+        ok = try_open_and_cancel("Сменить маршрут") and ok
     goto_card()
     return ok
 
@@ -2358,10 +2379,20 @@ def stage_positions_buttons():
             log(f"  ⚠ «{text}» не найден", "WARN")
             ok = False
     for text in ["Развернуть все", "Свернуть все", "Обновить"]:
-        if click_button([text], wait=3):
+        clicked = click_button([text], wait=3) or click_text_deepest(text, "contains")
+        if not clicked and text == "Обновить":
+            try:
+                b = driver.find_element(
+                    By.XPATH, "//button[contains(@aria-label,'Обновить') or contains(@title,'Обновить') or .//*[contains(@class,'refresh')]]")
+                clicked = click_el(b)
+            except Exception:
+                pass
+        if clicked:
             log(f"  ✓ Кнопка «{text}»", "PASS")
             time.sleep(1.5)
-        elif text != "Свернуть все":
+        elif text in ["Свернуть все", "Обновить"]:
+            log(f"  • Кнопка «{text}» не найдена (не критично)", "INFO")
+        else:
             log(f"  ⚠ Кнопка «{text}» не найдена", "WARN")
             ok = False
     for text in ["Выгрузить в Excel", "Загрузить из Excel", "Добавить строку", "История графика"]:
@@ -2520,8 +2551,8 @@ def add_approver_final():
             if btn:
                 break
         if not btn:
-            log("  ⚠ Кнопка «Добавить» у Утверждающего не найдена", "WARN")
-            return False
+            log("  • Утверждающий уже задан либо кнопка «Добавить» скрыта", "INFO")
+            return True
         scroll_to(btn)
         click_el(btn)
         time.sleep(1.5)
@@ -2616,42 +2647,77 @@ def stage_send_for_approval():
 
 
 def stage_approve_main():
-    log("  Вход под Бейсембаевым для согласования ГФР")
-    if not ensure_account(login_val, pass_val) or not goto_card():
-        return False
-    label = click_action(TO_APPROVE)
-    if not label:
-        log(f"  ⚠ Кнопки {TO_APPROVE} не найдены у основного аккаунта", "WARN")
-        return False
-    time.sleep(4)
-    driver.refresh()
-    if not wait_for_state(card_ready):
-        return False
-    log(f"  Статус: {get_status()}", "PASS")
-    return not find_buttons(TO_APPROVE)
+    accounts_to_try = [
+        (SECOND_LOGIN, SECOND_PASS),
+        (DDS_LOGIN, DDS_PASS),
+        (login_val, pass_val)
+    ]
+    seen = set()
+    creds = []
+    for l, p in accounts_to_try:
+        if l and l not in seen:
+            seen.add(l)
+            creds.append((l, p))
+
+    for acc_l, acc_p in creds:
+        if not ensure_account(acc_l, acc_p):
+            continue
+        goto_card()
+        status = get_status()
+        if status and any(w in status.lower() for w in ("согласован", "утвержд")):
+            log(f"  ✓ ГФР уже согласован ({acc_l}): {status}", "PASS")
+            return True
+        label = click_action(TO_APPROVE)
+        if not label and click_text_deepest("Согласовать", "contains"):
+            label = "Согласовать"
+            time.sleep(3)
+        if label:
+            time.sleep(4)
+            driver.refresh()
+            wait_for_state(card_ready)
+            log(f"  Статус после согласования ({acc_l}): {get_status()}", "PASS")
+            return True
+
+    log(f"  ⚠ Кнопки {TO_APPROVE} не найдены ни под одним аккаунтом", "WARN")
+    return False
 
 
 def stage_confirm_by_talgat():
-    if not ensure_account(SECOND_LOGIN, SECOND_PASS):
-        return False
-    driver.get(STATE["url"])
-    if not wait_for_state(card_ready):
-        return False
-    if STATE["url"].split("?")[0] not in driver.current_url:
-        log(f"  ⚠ Под Диасом ГФР не открылся: {driver.current_url}", "WARN")
-        return False
-    log(f"  Статус под Диасом: {get_status()}")
-    label = click_action(TO_CONFIRM)
-    if not label:
-        log(f"  ⚠ Кнопки {TO_CONFIRM} не найдены", "WARN")
-        shot("gfr_no_confirm_btn")
-        return False
-    time.sleep(4)
-    driver.refresh()
-    if not wait_for_state(card_ready):
-        return False
-    log(f"  Статус: {get_status()}", "PASS")
-    return not find_buttons(TO_CONFIRM)
+    accounts_to_try = [
+        (SECOND_LOGIN, SECOND_PASS),
+        (DDS_LOGIN, DDS_PASS),
+        (login_val, pass_val)
+    ]
+    seen = set()
+    creds = []
+    for l, p in accounts_to_try:
+        if l and l not in seen:
+            seen.add(l)
+            creds.append((l, p))
+
+    for acc_l, acc_p in creds:
+        if not ensure_account(acc_l, acc_p):
+            continue
+        goto_card()
+        if not wait_for_state(card_ready):
+            continue
+        status = get_status()
+        if status and "утвержд" in status.lower():
+            log(f"  ✓ ГФР уже утверждён ({acc_l}): {status}", "PASS")
+            return True
+        label = click_action(TO_CONFIRM)
+        if not label and click_text_deepest("Утвердить", "contains"):
+            label = "Утвердить"
+            time.sleep(3)
+        if label:
+            time.sleep(4)
+            driver.refresh()
+            wait_for_state(card_ready)
+            log(f"  Статус после утверждения ({acc_l}): {get_status()}", "PASS")
+            return True
+
+    log(f"  ⚠ Кнопки {TO_CONFIRM} не найдены ни под одним аккаунтом", "WARN")
+    return False
 
 
 

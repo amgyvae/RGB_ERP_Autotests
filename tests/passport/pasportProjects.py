@@ -96,8 +96,8 @@ def init_driver():
     )
     driver.implicitly_wait(0)
 
-login_val = env("RGB_ACCOUNT3_LOGIN", env("RGB_ACCOUNT1_LOGIN"))
-pass_val = env("RGB_ACCOUNT3_PASSWORD", env("RGB_ACCOUNT1_PASSWORD"))
+login_val = env("RGB_ACCOUNT1_LOGIN", env("RGB_ACCOUNT3_LOGIN"))
+pass_val = env("RGB_ACCOUNT1_PASSWORD", env("RGB_ACCOUNT3_PASSWORD"))
 
 BASE_URL = "https://testportal.rgbgroup.kz/"
 PROJECTS_URL = BASE_URL + "projects"
@@ -1586,6 +1586,11 @@ def stage_list_page():
 # ЭТАП 3: СОЗДАТЬ ПАСПОРТ / ОТМЕНА
 # ==========================================
 def open_create_page():
+    dismiss_news_popup(wait=1)
+    try:
+        driver.switch_to.alert.accept()
+    except Exception:
+        pass
     driver.get(PROJECTS_URL)
     wait_for_state(passport_list_ready, timeout=10)
     created = click_button(["Создать паспорт", "Создать", "+ Создать", "+ Паспорт"], wait=8)
@@ -1597,10 +1602,15 @@ def open_create_page():
         driver.get(CREATE_URL)
         wait_for_state(passport_form_ready, timeout=10)
     block_native_file_dialog()
-    return "/projects/create" in driver.current_url or "создание" in page_text()
+    return "/projects/create" in driver.current_url or any(w in page_text() for w in ("создание", "о проекте", "площади", "сохранить"))
 
 
 def confirm_leave_if_asked():
+    try:
+        driver.switch_to.alert.accept()
+        time.sleep(1)
+    except Exception:
+        pass
     m = find_modal()
     if m:
         b = modal_button(m, ["Да", "Выйти", "Покинуть", "Не сохранять", "Подтвердить", "ОК"])
