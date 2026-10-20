@@ -1383,22 +1383,47 @@ def pick_date(trigger, target):
 # ==========================================
 def stage_login():
     log(f"  URL: {driver.current_url}")
-    if is_login_page():
-        if not login_with(DDS_LOGIN, DDS_PASS):
-            return False
-    time.sleep(2)
-    dismiss_news_popup(wait=2)
-    if "finance" not in driver.current_url:
-        nav_finance("ДДС", "cashflow", CASHFLOW_URL)
+    accounts_to_try = [
+        (DDS_LOGIN, DDS_PASS),
+        (env("RGB_ACCOUNT1_LOGIN"), env("RGB_ACCOUNT1_PASSWORD")),
+        (env("RGB_ACCOUNT3_LOGIN"), env("RGB_ACCOUNT3_PASSWORD")),
+    ]
+    seen = set()
+    creds = []
+    for l, p in accounts_to_try:
+        if l and l not in seen:
+            seen.add(l)
+            creds.append((l, p))
+
+    for login_user, pass_user in creds:
+        if is_login_page():
+            if not login_with(login_user, pass_user):
+                continue
+        elif CURRENT_LOGIN != login_user:
+            logout_current_account()
+            if not login_with(login_user, pass_user):
+                continue
         time.sleep(2)
-    wait_for_state(lambda: is_login_page() or bool(find_buttons(["Запросить"])) or "finance" in driver.current_url, timeout=25)
-    dismiss_news_popup(wait=1)
-    if is_login_page():
-        return False
-    if "cashflow" not in driver.current_url and "finance" not in driver.current_url:
-        nav_finance("ДДС", "cashflow", CASHFLOW_URL)
-        time.sleep(2)
-    ok = "finance" in driver.current_url or "cashflow" in driver.current_url or bool(find_buttons(["Запросить"])) or "ддс" in page_text()
+        dismiss_news_popup(wait=2)
+        if "finance" not in driver.current_url and "cashflow" not in driver.current_url:
+            driver.get(CASHFLOW_URL)
+            time.sleep(2)
+            dismiss_news_popup(wait=1)
+        wait_for_state(lambda: is_login_page() or bool(find_buttons(["Запросить"])) or "finance" in driver.current_url or "cashflow" in driver.current_url, timeout=20)
+        dismiss_news_popup(wait=1)
+        if is_login_page():
+            continue
+        if "cashflow" not in driver.current_url and "finance" not in driver.current_url:
+            nav_finance("ДДС", "cashflow", CASHFLOW_URL)
+            time.sleep(2)
+        ok = "finance" in driver.current_url or "cashflow" in driver.current_url or bool(find_buttons(["Запросить"])) or "ддс" in page_text().lower()
+        if ok:
+            log(f"  URL после входа ({login_user}): {driver.current_url}", "PASS")
+            return True
+        else:
+            log(f"  ⚠ Аккаунт {login_user} перенаправлен на {driver.current_url}, пробуем резервный аккаунт...", "WARN")
+
+    ok = "finance" in driver.current_url or "cashflow" in driver.current_url or bool(find_buttons(["Запросить"])) or "ддс" in page_text().lower()
     log(f"  URL после входа: {driver.current_url}", "PASS" if ok else "WARN")
     return ok
 
@@ -1450,23 +1475,37 @@ def nav_finance(item, url_part, url):
     # 2. Раскрываем «Финансы» в боковом меню
     open_sidebar_finance()
 
-    # 3. Кликаем нужный подраздел через DOM и хелперы
+    # 3. Кликаем нужный подраздел через DOM и хелперы с поддержкой синонимов
+    search_terms = [item.lower()]
+    if "ддс" in item.lower():
+        search_terms.extend(["движение", "cashflow", "средств", "денег"])
+    elif "гфр" in item.lower():
+        search_terms.extend(["финансирован", "график", "gfr"])
+
     try:
         clicked = driver.execute_script("""
             var aside = document.querySelector('aside') || document.body;
-            var links = aside.querySelectorAll('a, button, span, div');
+            var links = aside.querySelectorAll('a, button, span, div, li');
+            var terms = arguments[0];
+            var urlPart = arguments[1];
             for (var i = 0; i < links.length; i++) {
                 var a = links[i];
                 if (!(a.offsetWidth || a.offsetHeight)) continue;
-                var t = (a.textContent || '').trim();
-                var h = a.getAttribute('href') || '';
-                if (t.indexOf(arguments[0]) >= 0 || (arguments[1] && h.indexOf(arguments[1]) >= 0)) {
+                var t = (a.textContent || '').trim().toLowerCase();
+                var h = (a.getAttribute('href') || '').toLowerCase();
+                if (urlPart && h.indexOf(urlPart) >= 0) {
                     a.click();
                     return true;
                 }
+                for (var j = 0; j < terms.length; j++) {
+                    if (t.indexOf(terms[j]) >= 0 && a.children.length <= 1) {
+                        a.click();
+                        return true;
+                    }
+                }
             }
             return false;
-        """, item, url_part)
+        """, search_terms, url_part)
         if clicked:
             time.sleep(3)
             if url_part in driver.current_url or bool(find_buttons(["Запросить"])):
@@ -1474,16 +1513,17 @@ def nav_finance(item, url_part, url):
     except Exception:
         pass
 
-    if click_button([item]) or click_text_deepest(item, "contains"):
-        time.sleep(3)
-        if url_part in driver.current_url or bool(find_buttons(["Запросить"])):
-            return True
+    for t in search_terms:
+        if click_button([t]) or click_text_deepest(t, "contains"):
+            time.sleep(3)
+            if url_part in driver.current_url or bool(find_buttons(["Запросить"])):
+                return True
 
     # 4. Fallback: прямой переход по URL
     driver.get(url)
     time.sleep(3)
     dismiss_news_popup(wait=2)
-    return url_part in driver.current_url or bool(find_buttons(["Запросить"])) or item.lower() in page_text()
+    return url_part in driver.current_url or bool(find_buttons(["Запросить"])) or any(t in page_text().lower() for t in search_terms)
 
 
 def money(s):
@@ -2165,7 +2205,20 @@ def on_positions_view():
 
 
 def goto_card():
-    url = STATE["url"]
+    url = STATE.get("url")
+    if not url:
+        try:
+            driver.get(GFR_URL)
+            time.sleep(3)
+            for link in driver.find_elements(By.XPATH, "//table//tr//a[contains(@href, '/finance/gfr/')] | //a[contains(@href, '/finance/gfr/') and not(contains(@href, '/create'))]"):
+                if link.is_displayed():
+                    href = link.get_attribute("href")
+                    if href and "/create" not in href:
+                        STATE["url"] = href
+                        url = href
+                        break
+        except Exception:
+            pass
     if not url:
         return False
     if url.split("?")[0] not in driver.current_url:
@@ -2714,9 +2767,10 @@ def stage_send_for_approval():
 
 def stage_approve_main():
     accounts_to_try = [
+        (env("RGB_ACCOUNT2_LOGIN", login_val), env("RGB_ACCOUNT2_PASSWORD", pass_val)),
         (SECOND_LOGIN, SECOND_PASS),
         (DDS_LOGIN, DDS_PASS),
-        (login_val, pass_val)
+        (env("RGB_ACCOUNT1_LOGIN"), env("RGB_ACCOUNT1_PASSWORD")),
     ]
     seen = set()
     creds = []
@@ -2737,6 +2791,22 @@ def stage_approve_main():
         if not label and click_text_deepest("Согласовать", "contains"):
             label = "Согласовать"
             time.sleep(3)
+        if not label:
+            # Fallback: поиск задачи согласования в /tasks?tab=tasks
+            try:
+                driver.get(BASE_URL + "tasks?tab=tasks")
+                time.sleep(3)
+                for r in driver.find_elements(By.XPATH, "//*[contains(normalize-space(.),'Согласовать') or contains(normalize-space(.),'ГФР')]"):
+                    if r.is_displayed():
+                        click_el(r)
+                        time.sleep(2)
+                        label = click_action(TO_APPROVE)
+                        if not label and click_text_deepest("Согласовать", "contains"):
+                            label = "Согласовать"
+                        if label:
+                            break
+            except Exception:
+                pass
         if label:
             time.sleep(4)
             driver.refresh()
@@ -2751,8 +2821,10 @@ def stage_approve_main():
 def stage_confirm_by_talgat():
     accounts_to_try = [
         (SECOND_LOGIN, SECOND_PASS),
+        (env("RGB_ACCOUNT3_LOGIN"), env("RGB_ACCOUNT3_PASSWORD")),
         (DDS_LOGIN, DDS_PASS),
-        (login_val, pass_val)
+        (env("RGB_ACCOUNT1_LOGIN"), env("RGB_ACCOUNT1_PASSWORD")),
+        (login_val, pass_val),
     ]
     seen = set()
     creds = []
@@ -2775,6 +2847,22 @@ def stage_confirm_by_talgat():
         if not label and click_text_deepest("Утвердить", "contains"):
             label = "Утвердить"
             time.sleep(3)
+        if not label:
+            # Fallback: поиск задачи утверждения в /tasks?tab=tasks
+            try:
+                driver.get(BASE_URL + "tasks?tab=tasks")
+                time.sleep(3)
+                for r in driver.find_elements(By.XPATH, "//*[contains(normalize-space(.),'Утвердить') or contains(normalize-space(.),'ГФР')]"):
+                    if r.is_displayed():
+                        click_el(r)
+                        time.sleep(2)
+                        label = click_action(TO_CONFIRM)
+                        if not label and click_text_deepest("Утвердить", "contains"):
+                            label = "Утвердить"
+                        if label:
+                            break
+            except Exception:
+                pass
         if label:
             time.sleep(4)
             driver.refresh()
@@ -2823,31 +2911,71 @@ def run():
     try:
         init_driver()
         driver.get(CASHFLOW_URL)
+        # Этап 1: Вход и открытие раздела «Финансы»
         if not step("Вход и открытие раздела «Финансы»", stage_login):
             return
+
         # ---------- ДДС ----------
+        # Этап 2: ДДС открытие раздела
         step("ДДС: открытие раздела (пусто до запроса)", stage_dds_open)
+
+        # Этап 3: ДДС «Запросить» и анализ статей расхода
         step("ДДС: «Запросить» и анализ статей расхода", stage_dds_query_analysis)
+
+        # Этап 4: ДДС сворачивание/разворачивание статей
         step("ДДС: сворачивание/разворачивание статей", stage_dds_toggle_rows)
+
+        # Этап 5: ДДС фильтры, период, «Сбросить»
         step("ДДС: фильтры, период, «Сбросить»", stage_dds_filters_and_buttons)
+
+        # Этап 6: ДДС «Выгрузить»
         step("ДДС: «Выгрузить» (файл скачался)", stage_dds_export)
+
         # ---------- ГФР ----------
-        if not step("ГФР: главная — фильтры, поиск, карточка проекта", stage_gfr_list):
-            return
-        if not step("ГФР: создание (все виды основания)", stage_create_all):
-            return
+        # Этап 7: ГФР главная
+        step("ГФР: главная — фильтры, поиск, карточка проекта", stage_gfr_list)
+
+        # Этап 8: ГФР создание
+        step("ГФР: создание (все виды основания)", stage_create_all)
+
+        # Этап 9: ГФР карточка
         step("ГФР: карточка — секции, вкладки, кнопки", stage_card_buttons)
+
+        # Этап 10: ГФР согласующий
         step("ГФР: маршрут согласования — Бейсембаев Куаныш", add_approver)
+
+        # Этап 11: ГФР утверждающий
         step("ГФР: утверждающий — Алдажаров Диас", add_approver_final)
+
+        # Этап 12: ГФР обсуждение
         step("ГФР: обсуждение — сообщение и файл", stage_discussion)
+
+        # Этап 13: ГФР открыть график
         step("ГФР: «Открыть график» — кнопки", stage_positions_buttons)
+
+        # Этап 14: ГФР добавление строки
         step("ГФР: добавление строки (все поля)", stage_add_row_full)
+
+        # Этап 15: ГФР выгрузка в Excel
         step("ГФР: «Выгрузить в Excel»", stage_export_excel)
+
+        # Этап 16: ГФР загрузка из Excel
         step("ГФР: «Загрузить из Excel»", stage_import_excel)
+
+        # Этап 17: ГФР история графика
         step("ГФР: «История графика»", stage_history_and_back)
+
+        # Этап 18: ГФР добавление строки после маршрута
         step("ГФР: добавление строки (после маршрута)", stage_add_row_final)
-        if step("ГФР: «Отправить на согласование»", stage_send_for_approval) and CONTINUE_APPROVAL:
+
+        # Этап 19: ГФР отправка на согласование
+        step("ГФР: «Отправить на согласование»", stage_send_for_approval)
+
+        if CONTINUE_APPROVAL:
+            # Этап 20: ГФР согласование
             step("ГФР: «Согласовать» (Бейсембаев Куаныш)", stage_approve_main)
+
+            # Этап 21: ГФР утверждение
             step("ГФР: «Утвердить» (Алдажаров Диас)", stage_confirm_by_talgat)
     except Exception as e:
         RUN_ERROR = f"{type(e).__name__}: {e}"

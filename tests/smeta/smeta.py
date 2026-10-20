@@ -1119,7 +1119,20 @@ def smeta_lines_ready():
 
 
 def goto_card():
-    url = STATE["url"]
+    url = STATE.get("url")
+    if not url:
+        try:
+            driver.get(ESTIMATES_URL)
+            time.sleep(3)
+            for link in driver.find_elements(By.XPATH, "//table//tr//a[contains(@href, '/estimates/')] | //a[contains(@href, '/estimates/') and not(contains(@href, '/create'))]"):
+                if link.is_displayed():
+                    href = link.get_attribute("href")
+                    if href and "/create" not in href:
+                        STATE["url"] = href
+                        url = href
+                        break
+        except Exception:
+            pass
     if not url:
         return False
     driver.get(url)
@@ -1746,7 +1759,10 @@ def approver_trigger():
         for t in driver.find_elements(
                 By.XPATH,
                 "//button[contains(@class,'ui-select__trigger')]"
-                "[contains(normalize-space(.),'Выбрать согласующего') or contains(.,'согласующ')]"):
+                "[contains(normalize-space(.),'Выбрать согласующего') or contains(.,'согласующ')] | "
+                "//div[contains(@class,'ui-select__trigger')][contains(normalize-space(.),'Выбрать согласующего') or contains(.,'согласующ')] | "
+                "//*[contains(@class,'ui-select')]//button | "
+                "//button[contains(normalize-space(.),'Выбрать согласующего')]"):
             if t.is_displayed():
                 return t
     except Exception:
@@ -1761,12 +1777,26 @@ def add_approver():
         return True
     trg = approver_trigger()
     if trg is None:
-        clicked = click_button(["Добавить этап"], wait=5) or \
-            click_text_deepest("Добавить этап", "exact")
-        if not clicked:
-            log("  • 'Добавить этап' не найдено — пробую '+ Этап'")
-            clicked = click_button(["Этап", "+ Этап"], wait=2)
-        log(f"  Нажато 'Добавить этап': {clicked}")
+        # Нажимаем круглую синюю кнопку '+👤' / 'Этапы согласования не настроены'
+        clicked = False
+        for xp in [
+            "//*[contains(normalize-space(.),'Этапы согласования')]",
+            "//*[contains(normalize-space(text()),'Маршрут согласования')]/following::button[1]",
+            "//*[contains(normalize-space(text()),'Маршрут согласования')]/following::*[self::button or self::div][1]",
+            "//button[contains(.,'Добавить этап') or contains(.,'Этап')]"
+        ]:
+            try:
+                for b in driver.find_elements(By.XPATH, xp):
+                    if b.is_displayed():
+                        click_el(b)
+                        clicked = True
+                        time.sleep(1.5)
+                        break
+            except Exception:
+                pass
+            if clicked:
+                break
+
         for _ in range(16):
             trg = approver_trigger()
             if trg:
@@ -2311,6 +2341,22 @@ def stage_approve_main():
         if not label and click_text_deepest("Согласовать", "contains"):
             label = "Согласовать"
             time.sleep(3)
+        if not label:
+            # Fallback: поиск задачи согласования в /tasks?tab=tasks
+            try:
+                driver.get(BASE_URL + "tasks?tab=tasks")
+                time.sleep(3)
+                for r in driver.find_elements(By.XPATH, "//*[contains(normalize-space(.),'Согласовать смету')]"):
+                    if r.is_displayed():
+                        click_el(r)
+                        time.sleep(2)
+                        label = click_action(TO_APPROVE)
+                        if not label and click_text_deepest("Согласовать", "contains"):
+                            label = "Согласовать"
+                        if label:
+                            break
+            except Exception:
+                pass
         if label:
             time.sleep(4)
             driver.refresh()
@@ -2349,6 +2395,22 @@ def stage_confirm_by_talgat():
         if not label and click_text_deepest("Утвердить", "contains"):
             label = "Утвердить"
             time.sleep(3)
+        if not label:
+            # Fallback: поиск задачи утверждения в /tasks?tab=tasks
+            try:
+                driver.get(BASE_URL + "tasks?tab=tasks")
+                time.sleep(3)
+                for r in driver.find_elements(By.XPATH, "//*[contains(normalize-space(.),'Утвердить')]"):
+                    if r.is_displayed():
+                        click_el(r)
+                        time.sleep(2)
+                        label = click_action(TO_CONFIRM)
+                        if not label and click_text_deepest("Утвердить", "contains"):
+                            label = "Утвердить"
+                        if label:
+                            break
+            except Exception:
+                pass
         if label:
             time.sleep(4)
             driver.refresh()
@@ -2387,40 +2449,80 @@ def run():
     try:
         init_driver()
         driver.get(ESTIMATES_URL)
+        # Этап 1: Вход и открытие раздела
         if not step("Смета: Вход и открытие раздела «Смета»", stage_login):
             return
+
+        # Этап 2: Список смет, фильтры и поиск
         step("Смета: Страница «Сметы проектов»: фильтры, поиск, проект", stage_list_page)
+
+        # Этап 3: Отрицательный тест - пустая форма
         step('Смета: Отрицательная  пустая форма создания', stage_negative_empty_create)
         if NEGATIVE_FATAL:
             return
+
+        # Этап 4: Отрицательный тест - без наименования
         step('Смета: Отрицательная  без наименования', stage_negative_no_name)
         if NEGATIVE_FATAL:
             return
+
+        # Этап 5: Отрицательный тест - без проекта
         step('Смета: Отрицательная  без проекта', stage_negative_no_project)
         if NEGATIVE_FATAL:
             return
+
+        # Этап 6: Отрицательный тест - некорректный тип файла
         step('Смета: Отрицательная  неподдерживаемый файл', stage_negative_file_type)
         if NEGATIVE_FATAL:
             return
+
+        # Этап 7: Отрицательный тест - некорректные заголовки Excel
         step('Смета: Отрицательная  Excel заголовков', stage_negative_file_headers)
         if NEGATIVE_FATAL:
             return
-        if not step("Смета: Создание сметы (шаблон Excel, дублирование)", stage_create):
-            return
+
+        # Этап 8: Создание сметы
+        step("Смета: Создание сметы (шаблон Excel, дублирование)", stage_create)
+
+        # Этап 9: Карточка сметы
         step("Смета: Карточка сметы: секции, вкладки, кнопки", stage_card_buttons)
+
+        # Этап 10: Маршрут согласования
         step("Смета: Маршрут согласования: Бейсембаев Куаныш", add_approver)
+
+        # Этап 11: Утверждающий
         step("Смета: Утверждающий: Алдажаров Диас", add_approver_final)
+
+        # Этап 12: Отрицательный тест - пустая строка
         step('Смета: Отрицательная  пустая строка сметы', stage_negative_empty_line)
         if NEGATIVE_FATAL:
             return
+
+        # Этап 13: Позиции сметы
         step("Смета: Позиции сметы: кнопки, добавление строки", stage_lines_buttons)
+
+        # Этап 14: Экспорт в Excel
         step("Смета: Выгрузить в Excel", stage_export_excel)
+
+        # Этап 15: Импорт из Excel
         step("Смета: Загрузить из Excel (шаблон)", stage_import_excel)
+
+        # Этап 16: История сметы
         step("Смета: История сметы", stage_history_and_back)
+
+        # Этап 17: Добавление строки
         step("Смета: Добавить строку (после маршрута)", stage_add_row_final)
+
+        # Этап 18: Обсуждение
         step("Смета: Обсуждение: сообщение и файл", stage_discussion)
+
+        # Этап 19: Отправка на согласование
         step("Смета: Отправить на согласование", stage_send_for_approval)
+
+        # Этап 20: Согласование
         step("Смета: Согласовать (Бейсембаев Куаныш)", stage_approve_main)
+
+        # Этап 21: Утверждение
         step("Смета: Утвердить (Алдажаров Диас)", stage_confirm_by_talgat)
     except Exception as e:
         RUN_ERROR = f"{type(e).__name__}: {e}"

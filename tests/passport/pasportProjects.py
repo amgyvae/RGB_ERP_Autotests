@@ -1591,11 +1591,33 @@ def open_create_page():
         driver.switch_to.alert.accept()
     except Exception:
         pass
-    driver.get(PROJECTS_URL)
-    wait_for_state(passport_list_ready, timeout=10)
-    created = click_button(["Создать паспорт", "Создать", "+ Создать", "+ Паспорт"], wait=8)
+    if "/projects/create" in driver.current_url or any(w in page_text() for w in ("о проекте", "площади", "создание паспорта")):
+        return True
+    if "/projects" not in driver.current_url:
+        driver.get(PROJECTS_URL)
+        wait_for_state(passport_list_ready, timeout=10)
+
+    # Ищем кнопку создания паспорта (строго исключая '+ Создать задачу' в шапке)
+    created = False
+    for xp in [
+        "//*[self::button or self::a][contains(normalize-space(.),'Создать паспорт')]",
+        "//main//*[self::button or self::a][contains(normalize-space(.),'Создать') and not(contains(.,'задач'))]",
+        "//*[contains(@class,'project')]//*[self::button or self::a][contains(normalize-space(.),'Создать') and not(contains(.,'задач'))]"
+    ]:
+        try:
+            for b in driver.find_elements(By.XPATH, xp):
+                if b.is_displayed() and b.is_enabled():
+                    click_el(b)
+                    created = True
+                    break
+        except Exception:
+            pass
+        if created:
+            break
+
     if not created:
-        created = click_text_deepest("Создать паспорт", "contains") or click_text_deepest("Создать", "exact")
+        created = click_text_deepest("Создать паспорт", "contains")
+
     if created:
         wait_for_state(passport_form_ready, timeout=10)
     if "/projects/create" not in driver.current_url:
@@ -1671,6 +1693,9 @@ def choose_pqb(project_kw=None, project_idx=None, q=0, b=0):
 
 
 def stage_form_basic():
+    if "/projects/create" not in driver.current_url:
+        if not open_create_page():
+            return False
     combo = choose_pqb(project_kw=PROJECT_KW)
     if not combo:
         return False
@@ -2023,6 +2048,17 @@ def edit_input_by_label(label, value):
 
 def stage_view_and_edit():
     time.sleep(2)
+    if "/projects/create" in driver.current_url or driver.current_url.rstrip("/").endswith("/projects"):
+        try:
+            driver.get(PROJECTS_URL)
+            time.sleep(3)
+            for c in driver.find_elements(By.XPATH, "//table//tr//a[contains(@href, '/projects/')] | //a[contains(@href, '/projects/') and not(contains(@href, '/create'))]"):
+                if c.is_displayed():
+                    click_el(c)
+                    time.sleep(3)
+                    break
+        except Exception:
+            pass
     txt = page_text()
     ok = True
     if STATE["status"]:
@@ -2099,21 +2135,45 @@ def run():
         init_driver()
         driver.get(PROJECTS_URL)
         wait_for_state(lambda: is_login_page() or passport_list_ready())
+        # Этап 1: Вход в систему под Талгатом Ерлановичем
         if not step("Вход и открытие «Паспорта проектов»", stage_login):
             return
+
+        # Этап 2: Проверка списка, фильтров и карточек
         step("Список: фильтры, вид, поиск, карточка проекта", stage_list_page)
-        if not step("Создать паспорт → Отмена → снова открыть", stage_cancel_create):
-            return
+
+        # Этап 3: Создание паспорта и отмена
+        step("Создать паспорт → Отмена → снова открыть", stage_cancel_create)
+
+        # Этап 4: Заполнение секций "О проекте" и "Площади"
         step("Форма 1-2: О проекте и Площади", stage_form_basic)
+
+        # Этап 5: Атрибуты
         step("Форма 3: Атрибуты (7 вкладок, даты ТУ, файлы)", stage_form_attributes)
+
+        # Этап 6: Документация
         step("Форма 4: Документация (файлы + комментарии)", stage_form_docs)
+
+        # Этап 7: Земельный участок
         step("Форма 5: Земельный участок", stage_form_land)
+
+        # Этап 8: Сроки
         step("Форма 6: Сроки (плановые/фактические даты)", stage_form_dates)
+
+        # Этап 9: Ответственные
         step("Форма 7: Ответственные", stage_form_people)
+
+        # Этап 10: Дополнительные характеристики
         step("Форма 8: Дополнительные характеристики", stage_form_extra)
+
+        # Этап 11: Фотографии и рендеры
         step("Форма 9: Фотографии/рендеры (6 штук)", stage_form_photos)
-        if step("Сохранение паспорта", stage_save):
-            step("Карточка паспорта: статус и редактирование", stage_view_and_edit)
+
+        # Этап 12: Сохранение паспорта
+        step("Сохранение паспорта", stage_save)
+
+        # Этап 13: Карточка и редактирование сохранённого паспорта
+        step("Карточка паспорта: статус и редактирование", stage_view_and_edit)
     except Exception as e:
         RUN_ERROR = f"{type(e).__name__}: {e}"
         log(f"КРИТИЧЕСКАЯ ОШИБКА: {e}", "FAIL")

@@ -407,22 +407,25 @@ def send_telegram_summary(script_name: str, findings: list, reasons: dict,
     title = "ЕСТЬ ОШИБКИ" if (failed_items or error) else "ВЫПОЛНЕН НЕ ПОЛНОСТЬЮ"
     lines = [f"{emoji} <b>Автотест: {escape(module_label)} — {title}</b> ({passed_checks}/{total_checks} успешно)", ""]
 
-    for name, reason in failed_items:
-        clean = _clean_reason(reason)
-        lines.append("❌ " + escape(name) + (" — " + escape(clean) if clean else ""))
-
     if error:
-        lines.append("❌ Ошибка запуска — " + escape(_clean_reason(error)))
-
+        lines.append("❌ <b>Ошибка запуска:</b> " + escape(_clean_reason(error)))
     if sheet_error and sheet_error != "FileNotFoundError":
-        lines.append("⚠️ Google Sheets: " + escape(_clean_reason(sheet_error)))
+        lines.append("⚠️ <b>Google Sheets:</b> " + escape(_clean_reason(sheet_error)))
 
-    if skipped:
-        if len(skipped) > 3:
-            lines.append(f"⏭ Пропущено этапов: {len(skipped)} (прервано из-за ошибки выше)")
+    lines.append("<b>Этапы сценария:</b>")
+    idx = 1
+    for name, ok in findings:
+        if ok:
+            lines.append(f"{idx}. ✅ {escape(name)}")
         else:
-            for name in skipped:
-                lines.append("⏭ Не выполнено: " + escape(name))
+            reason = reasons.get(name)
+            clean = _clean_reason(reason)
+            lines.append(f"{idx}. ❌ {escape(name)}" + (f" — <i>{escape(clean)}</i>" if clean else ""))
+        idx += 1
+
+    for name in skipped:
+        lines.append(f"{idx}. ⏸ {escape(name)} (пропущен)")
+        idx += 1
 
     if not findings and not skipped and not error:
         lines.append("Нет результатов выполненных проверок. Подробности в локальном логе.")
