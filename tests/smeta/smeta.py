@@ -1030,34 +1030,68 @@ def login_with(login_value, password_value):
     return True
 
 
+KC_LOGOUT_URL = "https://auth.testportal.rgbgroup.kz/realms/rgb/protocol/openid-connect/logout"
+
+
 def logout_current_account():
+    global CURRENT_LOGIN
     log("  Выход из текущего аккаунта...")
+    if is_login_page():
+        CURRENT_LOGIN = None
+        return True
+
+    # 1. Попытка выхода через UI
     try:
-        els = [e for e in driver.find_elements(
-            By.XPATH, "//*[self::button or self::a][contains(normalize-space(.),'Выйти')]")
-            if e.is_displayed()]
-        if els:
-            click_el(els[0])
-            time.sleep(1.5)
-            modal = wait_modal("выйдете", 5) or wait_modal("Вы уверены", 2)
+        if click_text_deepest("Выйти", "contains"):
+            time.sleep(2)
+            modal = wait_modal("выйдете", 3) or wait_modal("Вы уверены", 2)
             if modal:
                 btn = modal_button(modal, ["Выйти", "Да", "ОК", "Подтвердить"])
                 if btn:
                     click_el(btn)
                     time.sleep(3)
     except Exception as e:
-        log(f"  ⚠ UI-выход: {e}", "WARN")
+        log(f"  • UI-выход: {e}", "INFO")
+
     if is_login_page():
         log("  ✓ Вышли через UI", "PASS")
+        CURRENT_LOGIN = None
         return True
+
+    # 2. Выход через Keycloak logout endpoint
+    try:
+        driver.get(KC_LOGOUT_URL)
+        time.sleep(2)
+        for xp in ["//*[@id='kc-logout']", "//input[@type='submit']",
+                   "//button[contains(normalize-space(.),'Выйти') or contains(normalize-space(.),'Logout') or normalize-space(.)='Да']"]:
+            try:
+                for b in driver.find_elements(By.XPATH, xp):
+                    if b.is_displayed():
+                        click_el(b)
+                        time.sleep(2)
+                        break
+            except Exception:
+                pass
+    except Exception as e:
+        log(f"  • Keycloak logout: {e}", "INFO")
+
+    # 3. Очистка куки и сессий
     try:
         driver.delete_all_cookies()
         driver.execute_script("try{localStorage.clear();sessionStorage.clear();}catch(e){}")
     except Exception:
         pass
+
     driver.get(BASE_URL)
-    time.sleep(5)
-    return is_login_page()
+    time.sleep(4)
+    dismiss_news_popup(wait=2)
+    ok = is_login_page()
+    if ok:
+        CURRENT_LOGIN = None
+        log("  ✓ Успешный выход из системы", "PASS")
+    else:
+        log(f"  ⚠ После выхода страница: {driver.current_url}", "WARN")
+    return ok
 
 
 # ==========================================
