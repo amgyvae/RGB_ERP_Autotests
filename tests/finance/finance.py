@@ -2210,7 +2210,12 @@ def stage_create_all():
 # ГФР: КАРТОЧКА
 # ==========================================
 def on_positions_view():
-    return "вернуться к основной информации" in page_text()
+    txt = page_text()
+    return any(marker in txt for marker in (
+        "вернуться к основной информации",
+        "вернуться к информации",
+        "к основной информации"
+    )) or ("добавить строку" in txt and "выгрузить в excel" in txt) or ("диаграмма" in txt and "таблица" in txt and "нет позиций графика" in txt)
 
 
 def goto_card():
@@ -2234,7 +2239,7 @@ def goto_card():
         driver.get(url)
         return bool(wait_for_state(card_ready))
     elif on_positions_view():
-        if not (click_button(["Вернуться к основной информации"], wait=3)
+        if not (click_button(["Вернуться к основной информации", "К основной информации", "Вернуться"], wait=3)
                 or click_text_deepest("Вернуться к основной информации", "contains")):
             driver.get(url)
         return bool(wait_for_state(card_ready))
@@ -2246,8 +2251,18 @@ def open_positions():
         block_native_file_dialog()
         return True
     goto_card()
-    if click_button(["Открыть график"], wait=8) or click_text_deepest("Открыть график", "contains"):
-        if wait_for_state(lambda: on_positions_view() and bool(find_buttons(["Добавить строку"])), timeout=15):
+    clicked = click_button(["Открыть график"], wait=8) or click_text_deepest("Открыть график", "contains")
+    if not clicked:
+        try:
+            for b in driver.find_elements(By.XPATH, "//*[contains(normalize-space(.),'Открыть график') and not(self::script)]"):
+                if b.is_displayed():
+                    click_el(b)
+                    clicked = True
+                    break
+        except Exception:
+            pass
+    if clicked:
+        if wait_for_state(lambda: on_positions_view() or bool(find_buttons(["Добавить строку", "Выгрузить в Excel"])), timeout=15):
             block_native_file_dialog()
             return True
     log("  ⚠ «Открыть график» не открыл позиции", "WARN")
@@ -2742,7 +2757,7 @@ def add_approver_final():
 def stage_send_for_approval():
     goto_card()
     if not utv_assigned():
-        log("  ⚠ Отправка заблокирована: утверждающий Диас не назначен", "WARN")
+        log("  ⚠ Отправка заблокирована: утверждающий (Талгат Ерланович / Диас) не назначен", "WARN")
         return False
     before = get_status()
     log(f"  Статус до: {before}")

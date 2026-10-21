@@ -1758,8 +1758,15 @@ def stage_card_buttons():
 def route_has_approver():
     txt = page_text()
     m = re.search(r"маршрут согласования(.*?)утверждающий", txt, re.S)
-    seg = m.group(1) if m else txt
-    return any(word in seg for word in ("бейсембаев", "куаныш", "ерлан", "талгат", "согласующ"))
+    seg = m.group(1) if m else ""
+    if not seg:
+        m2 = re.search(r"маршрут согласования(.{0,600})", txt, re.S)
+        seg = m2.group(1) if m2 else ""
+    if not seg:
+        return False
+    has_person = any(w in seg for w in ("ерлан", "талгатович", "бейсембаев", "куаныш"))
+    is_placeholder = "выбрать согласующего" in seg or "не назначен" in seg
+    return has_person and not is_placeholder
 
 
 def approver_trigger():
@@ -1850,6 +1857,20 @@ def add_approver():
             click_el(b)
             wait_modal_closed("Согласующ", 6)
 
+    # Сохранение на странице, если есть кнопка Сохранить
+    for s_xp in [
+        "//*[contains(normalize-space(text()),'Маршрут согласования')]/following::button[normalize-space(.)='Сохранить'][1]",
+        "//*[contains(normalize-space(text()),' этап')]/following::button[normalize-space(.)='Сохранить'][1]",
+    ]:
+        try:
+            for sb in driver.find_elements(By.XPATH, s_xp):
+                if sb.is_displayed():
+                    click_el(sb)
+                    time.sleep(1.5)
+                    break
+        except Exception:
+            pass
+
     for _ in range(8):
         if route_has_approver():
             log("  ✓ Маршрут согласования настроен", "PASS")
@@ -1861,9 +1882,16 @@ def add_approver():
 # ==========================================
 # ЭТАП 6: УТВЕРЖДАЮЩИЙ
 # ==========================================
+def utv_assigned():
+    txt = page_text()
+    m = re.search(r"утверждающий(.{0,400})", txt, re.S)
+    seg = m.group(1) if m else ""
+    return any(w in seg for w in ("талгат", "ерланович", "алдажаров", "диас")) and "не назначен" not in seg and "выберите утверждающего" not in seg
+
+
 def add_approver_final():
     goto_card()
-    if any(w in page_text().lower() for w in ("талгат", "ерланович", "алдажаров", "алдaжаров", "диас")):
+    if utv_assigned():
         log("  ✓ Утверждающий уже назначен", "PASS")
         return True
     btn = None
@@ -1872,6 +1900,8 @@ def add_approver_final():
         "//*[contains(normalize-space(text()),'Утверждающий')]/following::*[self::button or self::a][contains(normalize-space(.),'Добавить')][1]",
         "//*[contains(normalize-space(text()),'Утверждающий не назначен')]"
         "/following::*[self::button or self::a][normalize-space(.)='Добавить'][1]",
+        "//*[contains(normalize-space(text()),'Утверждающий не назначен')]"
+        "/following::*[normalize-space(text())='Добавить'][1]",
     ]:
         try:
             for b in driver.find_elements(By.XPATH, xp):
@@ -1884,7 +1914,7 @@ def add_approver_final():
             break
     if not btn:
         log("  • Утверждающий уже задан либо кнопка 'Добавить' скрыта", "INFO")
-        return True
+        return utv_assigned()
     click_el(btn)
     modal = wait_modal("Утверждающий", 8)
     if not modal:
@@ -1893,7 +1923,7 @@ def add_approver_final():
     trg = None
     try:
         ts = [t for t in modal.find_elements(
-            By.XPATH, ".//button[contains(@class,'ui-select__trigger')]") if t.is_displayed()]
+            By.XPATH, ".//button[contains(@class,'ui-select__trigger')] | .//div[contains(@class,'ui-select__trigger')]") if t.is_displayed()]
         trg = ts[0] if ts else None
     except Exception:
         pass

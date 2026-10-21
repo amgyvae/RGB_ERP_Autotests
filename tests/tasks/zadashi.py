@@ -1,6 +1,6 @@
 
 from artifact_paths import SCREENS_DIR, LOGS_DIR, screen_path, log_path
-from env_config import env, env_list, is_headless  # секреты — из .env / GitHub Secrets
+from env_config import env, env_list, env_flag, is_headless  # секреты — из .env / GitHub Secrets
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -130,9 +130,9 @@ WAIT = 15
 # ==========================================
 # TELEGRAM
 # ==========================================
-TG_ENABLED = False  # <-- поставь True, когда будешь готов слать отчёты в Telegram
 TG_TOKEN = env("TG_TOKEN")
 TG_CHATS = env_list("TG_CHATS")
+TG_ENABLED = env_flag("TG_ENABLED", default=True) and bool(TG_TOKEN and TG_CHATS)
 TG_API = f"https://api.telegram.org/bot{TG_TOKEN}"
 
 def tg_send(text):
@@ -140,10 +140,13 @@ def tg_send(text):
         return
     for cid in TG_CHATS:
         try:
-            requests.post(f"{TG_API}/sendMessage", data={
+            r = requests.post(f"{TG_API}/sendMessage", data={
                 "chat_id": cid, "text": text[:4000], "parse_mode": "HTML"
             }, timeout=10)
-        except Exception: pass
+            if not r.ok:
+                print(f"[telegram] Ошибка отправки: {r.status_code} {r.text}")
+        except Exception as e:
+            print(f"[telegram] Исключение при отправке в чат {cid}: {e}")
 
 def tg_photo(path, caption=""):
     if not TG_ENABLED:

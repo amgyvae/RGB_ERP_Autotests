@@ -1,10 +1,10 @@
 name: Daily ERP Autotests
 
 on:
-  # Каждый день в 08:00 по Казахстану (UTC+5) = 03:00 UTC.
+  # Каждый день в 08:15 по Казахстану (UTC+5) = 03:15 UTC.
   # GitHub запускает расписание только из ветки по умолчанию (main).
   schedule:
-    - cron: "0 3 * * *"
+    - cron: "15 3 * * *"
   # Кнопка «Run workflow» во вкладке Actions для ручного запуска.
   workflow_dispatch:
     inputs:
