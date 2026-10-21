@@ -1585,6 +1585,42 @@ def stage_list_page():
 # ==========================================
 # ЭТАП 3: СОЗДАТЬ ПАСПОРТ / ОТМЕНА
 # ==========================================
+def get_create_passport_button():
+    for btn in find_buttons(["Создать паспорт", "+ Создать паспорт", "Создать", "+ Создать", "+ Паспорт"]):
+        try:
+            txt = (btn.text or btn.get_attribute("textContent") or "").strip()
+            if "задач" in txt.lower():
+                continue
+            is_in_header = driver.execute_script("""
+                var el = arguments[0];
+                return !!el.closest('header, nav, [class*="header"], [class*="topbar"], [class*="top-bar"]');
+            """, btn)
+            if not is_in_header:
+                return btn
+        except Exception:
+            continue
+    try:
+        btn = driver.execute_script("""
+            var btns = document.querySelectorAll('button, a, div[role="button"]');
+            for (var i = 0; i < btns.length; i++) {
+                var b = btns[i];
+                if (!(b.offsetWidth || b.offsetHeight)) continue;
+                if (b.closest('header, nav, [class*="header"], [class*="topbar"], [class*="top-bar"]')) continue;
+                var t = (b.textContent || '').trim();
+                if (t.indexOf('задач') >= 0) continue;
+                if (t === 'Создать' || t === '+ Создать' || t.indexOf('Создать паспорт') >= 0 || t.indexOf('Паспорт') >= 0) {
+                    return b;
+                }
+            }
+            return null;
+        """)
+        if btn:
+            return btn
+    except Exception:
+        pass
+    return None
+
+
 def open_create_page():
     dismiss_news_popup(wait=1)
     try:
@@ -1597,34 +1633,20 @@ def open_create_page():
         driver.get(PROJECTS_URL)
         wait_for_state(passport_list_ready, timeout=10)
 
-    # Ищем кнопку создания паспорта (строго исключая '+ Создать задачу' в шапке)
-    created = False
-    for xp in [
-        "//*[self::button or self::a][contains(normalize-space(.),'Создать паспорт')]",
-        "//main//*[self::button or self::a][contains(normalize-space(.),'Создать') and not(contains(.,'задач'))]",
-        "//*[contains(@class,'project')]//*[self::button or self::a][contains(normalize-space(.),'Создать') and not(contains(.,'задач'))]"
-    ]:
-        try:
-            for b in driver.find_elements(By.XPATH, xp):
-                if b.is_displayed() and b.is_enabled():
-                    click_el(b)
-                    created = True
-                    break
-        except Exception:
-            pass
-        if created:
-            break
-
-    if not created:
-        created = click_text_deepest("Создать паспорт", "contains")
-
-    if created:
+    btn = get_create_passport_button()
+    if btn:
+        click_el(btn)
+        time.sleep(2)
         wait_for_state(passport_form_ready, timeout=10)
-    if "/projects/create" not in driver.current_url:
+
+    if "/projects/create" not in driver.current_url and not any(w in page_text() for w in ("о проекте", "площади", "создание паспорта")):
         driver.get(CREATE_URL)
+        time.sleep(3)
         wait_for_state(passport_form_ready, timeout=10)
+
     block_native_file_dialog()
-    return "/projects/create" in driver.current_url or any(w in page_text() for w in ("создание", "о проекте", "площади", "сохранить"))
+    ok = "/projects/create" in driver.current_url or any(w in page_text() for w in ("создание", "о проекте", "площади", "сохранить"))
+    return ok
 
 
 def confirm_leave_if_asked():
@@ -1635,10 +1657,13 @@ def confirm_leave_if_asked():
         pass
     m = find_modal()
     if m:
-        b = modal_button(m, ["Да", "Выйти", "Покинуть", "Не сохранять", "Подтвердить", "ОК"])
+        b = modal_button(m, ["Да", "Выйти", "Покинуть", "Не сохранять", "Подтвердить", "ОК", "Отменить", "Продолжить"])
         if b:
             click_el(b)
             time.sleep(2)
+        else:
+            close_modal_soft(m)
+            time.sleep(1)
 
 
 def stage_cancel_create():
@@ -1655,7 +1680,10 @@ def stage_cancel_create():
     left = "/projects/create" not in driver.current_url
     log(f"  После 'Отмена': {driver.current_url} ({'ушли со страницы' if left else 'осталась'})",
         "PASS" if left else "WARN")
-    return open_create_page()
+    if not open_create_page():
+        log("  ⚠ Повторное открытие страницы создания не удалось", "WARN")
+        return False
+    return True
 
 
 # ==========================================

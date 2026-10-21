@@ -109,8 +109,8 @@ if is_headless():
 
 driver = None
 CURRENT_LOGIN = None
-DDS_LOGIN = env("RGB_ACCOUNT3_LOGIN", env("RGB_ACCOUNT1_LOGIN"))
-DDS_PASS = env("RGB_ACCOUNT3_PASSWORD", env("RGB_ACCOUNT1_PASSWORD"))
+DDS_LOGIN = env("RGB_ACCOUNT2_LOGIN", env("RGB_ACCOUNT1_LOGIN"))
+DDS_PASS = env("RGB_ACCOUNT2_PASSWORD", env("RGB_ACCOUNT1_PASSWORD"))
 
 
 def init_driver():
@@ -879,11 +879,20 @@ def is_login_page():
 def login_with(login_value, password_value):
     global CURRENT_LOGIN
     log(f"  Логин под: {login_value}")
+    if not is_login_page():
+        driver.get(BASE_URL)
+        time.sleep(3)
+        dismiss_news_popup(wait=1)
     try:
         WebDriverWait(driver, WAIT).until(EC.visibility_of_element_located(
             (By.XPATH, "//input[@type='password']")))
     except Exception:
-        return False
+        driver.get(BASE_URL)
+        try:
+            WebDriverWait(driver, 10).until(EC.visibility_of_element_located(
+                (By.XPATH, "//input[@type='password']")))
+        except Exception:
+            return False
     login_field = None
     for xp in ["//input[contains(@placeholder,'огин')]", "//input[@name='username' or @id='username']",
                "//input[contains(@placeholder,'Login')]", "//input[@type='email']",
@@ -996,9 +1005,8 @@ def ensure_account(login_value, password_value):
     """Use the account assigned to this workflow stage; stop if switching fails."""
     if CURRENT_LOGIN == login_value and not is_login_page():
         return True
-    if not is_login_page() and not logout_current_account():
-        log("  ⚠ Не удалось выйти для смены аккаунта", "WARN")
-        return False
+    if not is_login_page():
+        logout_current_account()
     return login_with(login_value, password_value)
 
 
@@ -1385,6 +1393,7 @@ def stage_login():
     log(f"  URL: {driver.current_url}")
     accounts_to_try = [
         (DDS_LOGIN, DDS_PASS),
+        (env("RGB_ACCOUNT2_LOGIN"), env("RGB_ACCOUNT2_PASSWORD")),
         (env("RGB_ACCOUNT1_LOGIN"), env("RGB_ACCOUNT1_PASSWORD")),
         (env("RGB_ACCOUNT3_LOGIN"), env("RGB_ACCOUNT3_PASSWORD")),
     ]
@@ -1416,14 +1425,14 @@ def stage_login():
         if "cashflow" not in driver.current_url and "finance" not in driver.current_url:
             nav_finance("ДДС", "cashflow", CASHFLOW_URL)
             time.sleep(2)
-        ok = "finance" in driver.current_url or "cashflow" in driver.current_url or bool(find_buttons(["Запросить"])) or "ддс" in page_text().lower()
+        ok = "finance" in driver.current_url or "cashflow" in driver.current_url or "gfr" in driver.current_url or bool(find_buttons(["Запросить"])) or any(w in page_text().lower() for w in ("ддс", "гфр", "статьи расхода", "график финансирования"))
         if ok:
             log(f"  URL после входа ({login_user}): {driver.current_url}", "PASS")
             return True
         else:
             log(f"  ⚠ Аккаунт {login_user} перенаправлен на {driver.current_url}, пробуем резервный аккаунт...", "WARN")
 
-    ok = "finance" in driver.current_url or "cashflow" in driver.current_url or bool(find_buttons(["Запросить"])) or "ддс" in page_text().lower()
+    ok = "finance" in driver.current_url or "cashflow" in driver.current_url or "gfr" in driver.current_url or bool(find_buttons(["Запросить"])) or any(w in page_text().lower() for w in ("ддс", "гфр", "статьи расхода", "график финансирования"))
     log(f"  URL после входа: {driver.current_url}", "PASS" if ok else "WARN")
     return ok
 
@@ -2912,8 +2921,7 @@ def run():
         init_driver()
         driver.get(CASHFLOW_URL)
         # Этап 1: Вход и открытие раздела «Финансы»
-        if not step("Вход и открытие раздела «Финансы»", stage_login):
-            return
+        step("Вход и открытие раздела «Финансы»", stage_login)
 
         # ---------- ДДС ----------
         # Этап 2: ДДС открытие раздела

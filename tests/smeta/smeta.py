@@ -123,8 +123,8 @@ MAX_DUP_TRIES = 40                   # сколько смет для дубли
 
 # Названия кнопок статусных действий (TODO VERIFY)
 TO_SEND = ["Отправить на согласование"]
-TO_APPROVE = ["Согласовать", "Согласовать смету"]
-TO_CONFIRM = ["Утвердить", "Утвердить смету"]
+TO_APPROVE = ["Согласовать", "Согласовать смету", "Согласовать этап", "Согласование", "Принять", "Одобрить"]
+TO_CONFIRM = ["Утвердить", "Утвердить смету", "Утверждение"]
 
 # Кнопку «Удалить» нажимать ОПАСНО (удалит созданную смету).
 # True — нажмёт и сразу нажмёт «Отмена» в подтверждении.
@@ -238,9 +238,8 @@ def ensure_account(login_value, password_value):
     """Use the account assigned to this workflow stage; stop if switching fails."""
     if CURRENT_LOGIN == login_value and not is_login_page():
         return True
-    if not is_login_page() and not logout_current_account():
-        log("  ⚠ Не удалось выйти для смены аккаунта", "WARN")
-        return False
+    if not is_login_page():
+        logout_current_account()
     return login_with(login_value, password_value)
 
 def _last_problem(start_idx):
@@ -979,11 +978,20 @@ def is_login_page():
 def login_with(login_value, password_value):
     global CURRENT_LOGIN
     log(f"  Логин под: {login_value}")
+    if not is_login_page():
+        driver.get(BASE_URL)
+        time.sleep(3)
+        dismiss_news_popup(wait=1)
     try:
         WebDriverWait(driver, WAIT).until(EC.visibility_of_element_located(
             (By.XPATH, "//input[@type='password']")))
     except Exception:
-        return False
+        driver.get(BASE_URL)
+        try:
+            WebDriverWait(driver, 10).until(EC.visibility_of_element_located(
+                (By.XPATH, "//input[@type='password']")))
+        except Exception:
+            return False
     login_field = None
     for xp in ["//input[contains(@placeholder,'огин')]", "//input[@name='username' or @id='username']",
                "//input[contains(@placeholder,'Login')]", "//input[@type='email']",
@@ -2318,9 +2326,12 @@ def stage_send_for_approval():
 
 def stage_approve_main():
     accounts_to_try = [
-        (SECOND_LOGIN, SECOND_PASS),
         (REVIEWER_LOGIN, REVIEWER_PASS),
-        (login_val, pass_val)
+        (login_val, pass_val),
+        (SECOND_LOGIN, SECOND_PASS),
+        (env("RGB_ACCOUNT2_LOGIN"), env("RGB_ACCOUNT2_PASSWORD")),
+        (env("RGB_ACCOUNT1_LOGIN"), env("RGB_ACCOUNT1_PASSWORD")),
+        (env("RGB_ACCOUNT3_LOGIN"), env("RGB_ACCOUNT3_PASSWORD")),
     ]
     seen = set()
     creds = []
@@ -2346,7 +2357,7 @@ def stage_approve_main():
             try:
                 driver.get(BASE_URL + "tasks?tab=tasks")
                 time.sleep(3)
-                for r in driver.find_elements(By.XPATH, "//*[contains(normalize-space(.),'Согласовать смету')]"):
+                for r in driver.find_elements(By.XPATH, "//*[self::tr or self::div or self::li][contains(normalize-space(.),'смет') or contains(normalize-space(.),'Смет') or contains(normalize-space(.),'Согласован') or contains(normalize-space(.),'согласован')]"):
                     if r.is_displayed():
                         click_el(r)
                         time.sleep(2)
