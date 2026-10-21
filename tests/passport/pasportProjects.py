@@ -311,7 +311,7 @@ def passport_list_ready():
 
 
 def passport_form_ready():
-    return ('/projects/create' in driver.current_url or 'создание' in page_text()) and (control_by_label(driver, 'Проект') is not None or bool(find_buttons(['Сохранить'])))
+    return ('/projects/create' in driver.current_url or any(w in page_text() for w in ('создание', 'о проекте', 'паспорт проекта'))) and (control_by_label(driver, 'Проект') is not None or bool(find_buttons(['Сохранить'])) or 'площади' in page_text())
 
 
 def selected_option_changed(trigger, before):
@@ -1628,27 +1628,33 @@ def open_create_page():
         driver.switch_to.alert.accept()
     except Exception:
         pass
-    if "/projects/create" in driver.current_url or any(w in page_text() for w in ("о проекте", "площади", "создание паспорта")):
+    if "/projects/create" in driver.current_url or any(w in page_text() for w in ("о проекте", "площади", "создание паспорта", "паспорт проекта")):
         return True
     if "/projects" not in driver.current_url:
         driver.get(PROJECTS_URL)
         wait_for_state(passport_list_ready, timeout=10)
 
-    btn = get_create_passport_button()
+    btn = None
+    for _ in range(5):
+        btn = get_create_passport_button()
+        if btn:
+            break
+        time.sleep(1)
+
     if btn:
         log(f"  Клик по кнопке создания паспорта: {btn.text or btn.get_attribute('textContent')}")
         click_el(btn)
         time.sleep(2)
         wait_for_state(passport_form_ready, timeout=10)
 
-    if "/projects/create" not in driver.current_url and not any(w in page_text() for w in ("о проекте", "площади", "создание паспорта")):
+    if "/projects/create" not in driver.current_url and not any(w in page_text() for w in ("о проекте", "площади", "создание паспорта", "паспорт проекта")):
         log("  Переход по прямой ссылке CREATE_URL")
         driver.get(CREATE_URL)
         time.sleep(3)
         wait_for_state(passport_form_ready, timeout=10)
 
     block_native_file_dialog()
-    ok = "/projects/create" in driver.current_url or any(w in page_text() for w in ("создание", "о проекте", "площади", "сохранить"))
+    ok = "/projects/create" in driver.current_url or any(w in page_text() for w in ("создание", "о проекте", "площади", "сохранить", "паспорт проекта"))
     return ok
 
 
@@ -1726,7 +1732,7 @@ def choose_pqb(project_kw=None, project_idx=None, q=0, b=0):
 
 
 def stage_form_basic():
-    if "/projects/create" not in driver.current_url:
+    if "/projects/create" not in driver.current_url and not any(w in page_text() for w in ("о проекте", "площади", "создание")):
         if not open_create_page():
             return False
     combo = choose_pqb(project_kw=PROJECT_KW)
