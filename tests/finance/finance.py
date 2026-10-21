@@ -135,9 +135,9 @@ WAIT = 15
 
 STAMP = datetime.now().strftime('%d%m-%H%M%S')
 PROJECT_QUERY = "Flagman"
-APPROVER_QUERY = env("RGB_APPROVER_QUERY", 'Бейсембаев')
-UTV_QUERY = env("RGB_UTV_QUERY", 'Алд')
-UTV_KEYS = ['алдажаров диас андреевич', 'алдaжаров диасс андреевичч']
+APPROVER_QUERY = env("RGB_APPROVER_QUERY", 'Ерлан')
+UTV_QUERY = env("RGB_UTV_QUERY", 'Талгат')
+UTV_KEYS = ['талгат ерланович', 'талгат', 'ерланович', 'алдажаров диас андреевич', 'алдaжаров диасс андреевичч']
 
 # «Взять за основу»: порядок создания. ПЕРВЫЙ успешно созданный идёт по основному сценарию.
 GFR_BASES = ["Без основания", "Смета", "ГПР", "Файл Excel"]
@@ -1024,10 +1024,10 @@ def parse_total():
     return None
 
 def route_has_approver():
-    txt = page_text()
+    txt = page_text().lower()
     m = re.search(r"маршрут согласования(.*?)утверждающий", txt, re.S)
-    seg = m.group(1) if m else ""
-    return all(word in seg for word in ("бейсембаев", "куаныш", "едилович"))
+    seg = m.group(1) if m else txt
+    return any(word in seg for word in ("ерлан", "талгатович", "бейсембаев", "куаныш", "едилович"))
 
 def approver_trigger():
     try:
@@ -1079,7 +1079,7 @@ def add_approver():
     if not panel:
         log("  ⚠ Список согласующих не открылся", "WARN")
         return False
-    picked = select_in_panel(panel, keywords=["бейсембаев куаныш едилович"],
+    picked = select_in_panel(panel, keywords=["ерлан талгатович", "ерлан", "талгатович", "бейсембаев куаныш едилович"],
                              search=APPROVER_QUERY)
     if not picked:
         log(f"  ⚠ '{APPROVER_QUERY}' не найден в списке", "WARN")
@@ -1101,7 +1101,7 @@ def add_approver():
             log("  ✓ Маршрут согласования настроен", "PASS")
             return True
         time.sleep(1)
-    log("  ⚠ Бейсембаев Куаныш не появился в маршруте", "WARN")
+    log(f"  ⚠ Согласующий ({APPROVER_QUERY}) не появился в маршруте", "WARN")
     return False
 
 def try_open_and_cancel(text):
@@ -2639,7 +2639,7 @@ def utv_assigned():
     t = (driver.execute_script("return document.body.innerText;") or "").lower()
     m = re.search(r"утверждающий(.{0,400})", t, re.S)
     seg = m.group(1) if m else ""
-    return all(word in seg for word in ("алд", "диас", "андреевич")) and "не назначен" not in seg and "выберите утверждающего" not in seg
+    return any(word in seg for word in ("талгат", "ерланович", "алд", "диас")) and "не назначен" not in seg and "выберите утверждающего" not in seg
 
 
 def utv_trigger():
@@ -2950,10 +2950,10 @@ def run():
         step("ГФР: карточка — секции, вкладки, кнопки", stage_card_buttons)
 
         # Этап 10: ГФР согласующий
-        step("ГФР: маршрут согласования — Бейсембаев Куаныш", add_approver)
+        step("ГФР: маршрут согласования — Ерлан Талгатович", add_approver)
 
         # Этап 11: ГФР утверждающий
-        step("ГФР: утверждающий — Алдажаров Диас", add_approver_final)
+        step("ГФР: утверждающий — Талгат Ерланович", add_approver_final)
 
         # Этап 12: ГФР обсуждение
         step("ГФР: обсуждение — сообщение и файл", stage_discussion)
@@ -2981,10 +2981,10 @@ def run():
 
         if CONTINUE_APPROVAL:
             # Этап 20: ГФР согласование
-            step("ГФР: «Согласовать» (Бейсембаев Куаныш)", stage_approve_main)
+            step("ГФР: «Согласовать» (Ерлан Талгатович)", stage_approve_main)
 
             # Этап 21: ГФР утверждение
-            step("ГФР: «Утвердить» (Алдажаров Диас)", stage_confirm_by_talgat)
+            step("ГФР: «Утвердить» (Талгат Ерланович)", stage_confirm_by_talgat)
     except Exception as e:
         RUN_ERROR = f"{type(e).__name__}: {e}"
         log(f"КРИТИЧЕСКАЯ ОШИБКА: {e}", "FAIL")

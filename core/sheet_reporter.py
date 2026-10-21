@@ -80,11 +80,21 @@ def _find_row_in_column(tasks_column, task_name: str, row_range=None):
     столбец читается один раз на весь пакет находок."""
     start = row_range[0] if row_range else 1
     end = row_range[1] if row_range else len(tasks_column)
+    norm_target = _normalize_text(task_name)
     matches = []
     for i in range(start, min(end, len(tasks_column)) + 1):
         value = tasks_column[i - 1] if i - 1 < len(tasks_column) else ""
-        if _normalize_text(value) == _normalize_text(task_name):
+        if _normalize_text(value) == norm_target:
             matches.append(i)
+    if not matches:
+        alias_target = (norm_target.replace("ерлан талгатович", "бейсембаев куаныш")
+                                   .replace("талгат ерланович", "алдажаров диас")
+                                   .replace("бейсембаев куаныш", "ерлан талгатович")
+                                   .replace("алдажаров диас", "талгат ерланович"))
+        for i in range(start, min(end, len(tasks_column)) + 1):
+            value = tasks_column[i - 1] if i - 1 < len(tasks_column) else ""
+            if _normalize_text(value) == alias_target:
+                matches.append(i)
     if len(matches) > 1:
         raise ValueError(
             f"Проверка '{task_name}' неоднозначна: строки {matches}. "

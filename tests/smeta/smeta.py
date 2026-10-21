@@ -116,9 +116,9 @@ WAIT = 15
 STAMP = datetime.now().strftime('%d%m-%H%M%S')
 ESTIMATE_NAME = f"AutoTest смета {STAMP}"
 PROJECT_QUERY = "Flagman"
-APPROVER_QUERY = env("RGB_APPROVER_QUERY", 'Бейсембаев')
-UTV_QUERY = env("RGB_UTV_QUERY", 'Алд')
-UTV_KEYS = ['алдажаров диас андреевич', 'алдaжаров диасс андреевичч']
+APPROVER_QUERY = env("RGB_APPROVER_QUERY", 'Ерлан')
+UTV_QUERY = env("RGB_UTV_QUERY", 'Талгат')
+UTV_KEYS = ['талгат ерланович', 'талгат', 'ерланович', 'алдажаров диас андреевич', 'алдaжаров диасс андреевичч']
 MAX_DUP_TRIES = 40                   # сколько смет для дублирования перебирать
 
 # Названия кнопок статусных действий (TODO VERIFY)
@@ -1830,9 +1830,9 @@ def add_approver():
     if not panel:
         log("  ⚠ Список согласующих не открылся", "WARN")
         return False
-    keywords = ["бейсембаев", "ерлан", "талгат", "куаныш"]
+    keywords = ["ерлан талгатович", "ерлан", "талгатович", "бейсембаев", "куаныш"]
     picked = select_in_panel(panel, keywords=keywords,
-                             search=APPROVER_QUERY if APPROVER_QUERY != 'Бейсембаев' else None)
+                             search=APPROVER_QUERY)
     if not picked:
         picked = select_in_panel(panel, index=0)
     if not picked:
@@ -1863,8 +1863,8 @@ def add_approver():
 # ==========================================
 def add_approver_final():
     goto_card()
-    if any(w in page_text() for w in ("алдажаров", "алдaжаров", "диас")):
-        log("  ✓ Утверждающий уже назначен (Алдажаров)", "PASS")
+    if any(w in page_text().lower() for w in ("талгат", "ерланович", "алдажаров", "алдaжаров", "диас")):
+        log("  ✓ Утверждающий уже назначен", "PASS")
         return True
     btn = None
     for xp in [
@@ -1898,7 +1898,7 @@ def add_approver_final():
     except Exception:
         pass
     panel = open_ui(trg)
-    picked = select_in_panel(panel, keywords=UTV_KEYS + ["алдажаров", "диас", "талгат", "ерлан"], search=UTV_QUERY) if panel else None
+    picked = select_in_panel(panel, keywords=UTV_KEYS + ["талгат", "ерланович", "алдажаров", "диас"], search=UTV_QUERY) if panel else None
     if not picked and panel:
         picked = select_in_panel(panel, index=0)
     if not picked:
@@ -2499,10 +2499,10 @@ def run():
         step("Смета: Карточка сметы: секции, вкладки, кнопки", stage_card_buttons)
 
         # Этап 10: Маршрут согласования
-        step("Смета: Маршрут согласования: Бейсембаев Куаныш", add_approver)
+        step("Смета: Маршрут согласования: Ерлан Талгатович", add_approver)
 
         # Этап 11: Утверждающий
-        step("Смета: Утверждающий: Алдажаров Диас", add_approver_final)
+        step("Смета: Утверждающий: Талгат Ерланович", add_approver_final)
 
         # Этап 12: Отрицательный тест - пустая строка
         step('Смета: Отрицательная  пустая строка сметы', stage_negative_empty_line)
@@ -2531,10 +2531,10 @@ def run():
         step("Смета: Отправить на согласование", stage_send_for_approval)
 
         # Этап 20: Согласование
-        step("Смета: Согласовать (Бейсембаев Куаныш)", stage_approve_main)
+        step("Смета: Согласовать (Ерлан Талгатович)", stage_approve_main)
 
         # Этап 21: Утверждение
-        step("Смета: Утвердить (Алдажаров Диас)", stage_confirm_by_talgat)
+        step("Смета: Утвердить (Талгат Ерланович)", stage_confirm_by_talgat)
     except Exception as e:
         RUN_ERROR = f"{type(e).__name__}: {e}"
         log(f"КРИТИЧЕСКАЯ ОШИБКА: {e}", "FAIL")
