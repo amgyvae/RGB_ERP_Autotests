@@ -61,14 +61,11 @@ def report_to_sheet(task_name, passed, row_range):
         else:
             reason = "причина не определена в логе"
 
-        # Скриншот "бага" — состояние страницы в момент фиксации провала,
-        # отправляется в Telegram сразу (по договорённости: скрин делается
-        # только на проваленных проверках, не на каждом шаге).
+        # Скриншот сохраняем локально для истории и отладки
         try:
             safe_name = re.sub(r"[^0-9A-Za-zА-Яа-яЁё]+", "_", task_name)[:40]
             shot_path = screen_path(f"scr_fail_{safe_name}.png")
             driver.save_screenshot(shot_path)
-            tg_photo(shot_path, caption=f"❌ {task_name}")
         except Exception:
             pass
 
@@ -120,8 +117,8 @@ driver.implicitly_wait(0)  # ВАЖНО: было 3 — вызывало огр�
 # несколько стратегий поиска подряд) молча висеть до 3 секунд, прежде чем
 # перейти к следующей. Именно это, а не сами паузы, было причиной
 # 2+ минут на одно значение фильтра.
-login_val = env("RGB_ACCOUNT1_LOGIN", env("RGB_ACCOUNT2_LOGIN"))
-pass_val = env("RGB_ACCOUNT1_PASSWORD", env("RGB_ACCOUNT2_PASSWORD"))
+login_val = env("RGB_ACCOUNT1_LOGIN", "jyktmargyplay2@gmail.com")
+pass_val = env("RGB_ACCOUNT1_PASSWORD", env("RGB_ACCOUNT1_PASSWORD_ALT", "12341234"))
 
 BASE_URL = "https://testportal.rgbgroup.kz/"
 TASKS_URL = "https://testportal.rgbgroup.kz/?tab=tasks"
@@ -965,26 +962,57 @@ def _close_form_dropdown_safe(trigger_el, modal=None):
         pass
 
 # ==========================================
+def close_any_open_modal():
+    try:
+        for b in driver.find_elements(By.XPATH, "//div[contains(@class,'modal') or contains(@class,'dialog')]//button[contains(@class,'close') or normalize-space(.)='Отмена' or normalize-space(.)='Закрыть']"):
+            if b.is_displayed():
+                _hard_click(b)
+                time.sleep(0.8)
+        ActionChains(driver).send_keys(Keys.ESCAPE).perform()
+        time.sleep(0.5)
+    except Exception:
+        pass
+
+
+# ==========================================
 # 1. АВТОРИЗАЦИЯ
 # ==========================================
 def run_login():
     log("=" * 50)
     log("ЭТАП 1: АВТОРИЗАЦИЯ")
     driver.get(BASE_URL)
-    time.sleep(1)
-    if "tab=" in driver.current_url:
-        log("Уже авторизованы", "PASS")
+    time.sleep(2)
+
+    # Проверяем, не залогинены ли под согласующим/утверждающим (Талгат / Ерлан)
+    page_txt = (driver.execute_script("return document.body.innerText;") or "").lower()
+    if any(w in page_txt for w in ("талгат", "ерлан", "алдажаров", "бейсембаев")):
+        log("Обнаружена сессия другого аккаунта, выполняем выход для входа под основным аккаунтом...", "INFO")
+        for b in driver.find_elements(By.XPATH, "//*[normalize-space(.)='Выйти'] | //button[contains(.,'Выйти')] | //a[contains(.,'Выйти')]"):
+            if b.is_displayed():
+                _hard_click(b)
+                time.sleep(2)
+                break
+
+    if "tab=" in driver.current_url and not any(w in (driver.execute_script("return document.body.innerText;") or "").lower() for w in ("талгат", "ерлан")):
+        log(f"Уже авторизованы под основным аккаунтом ({login_val})", "PASS")
         return True
+
     try:
-        el = wait_for((By.ID, "username"), cond="visible"); el.clear(); el.send_keys(login_val)
-        el = wait_for((By.ID, "password"), cond="visible"); el.clear(); el.send_keys(pass_val)
+        el = wait_for((By.ID, "username"), cond="visible")
+        el.clear()
+        el.send_keys(login_val)
+        el = wait_for((By.ID, "password"), cond="visible")
+        el.clear()
+        el.send_keys(pass_val)
         js_click(wait_for((By.XPATH, "//button[@type='submit']"), cond="clickable"))
-        time.sleep(1.5)
-        _any_table_present(timeout=20)  # или таблица (любой кит), или просто дождались перехода
-        log("Авторизация успешна", "PASS")
+        time.sleep(2)
+        _any_table_present(timeout=20)
+        log(f"Авторизация успешна под основным аккаунтом ({login_val})", "PASS")
         return True
-    except Exception:
-        log("Авторизация не удалась", "FAIL"); shot("login_fail"); return False
+    except Exception as e:
+        log(f"Авторизация не удалась: {e}", "FAIL")
+        shot("login_fail")
+        return False
 
 # ==========================================
 # 2. ПЕРЕХОД НА ЗАДАЧИ
@@ -992,15 +1020,18 @@ def run_login():
 def go_to_tasks():
     log("=" * 50)
     log("ЭТАП 2: ПЕРЕХОД НА ЗАДАЧИ")
+    close_any_open_modal()
     if "tab=tasks" not in driver.current_url:
-        driver.get(TASKS_URL); time.sleep(1.5)
+        driver.get(TASKS_URL)
+        time.sleep(1.5)
     try:
         if not _any_table_present(timeout=15):
             raise TimeoutException("таблица не появилась")
         log(f"Страница задач. Всего: {get_total()}", "PASS")
         return True
     except Exception:
-        log("Таблица не найдена", "FAIL"); return False
+        log("Таблица не найдена", "FAIL")
+        return False
 
 
 # ==========================================
@@ -1014,9 +1045,18 @@ def go_to_tasks():
 def go_to_assignments():
     log("=" * 50)
     log("ПЕРЕХОД В 'ПОРУЧЕНИЯ'")
+    close_any_open_modal()
     try:
         links = driver.find_elements(By.XPATH, "//*[normalize-space(text())='Поручения']")
         visible = [l for l in links if l.is_displayed()]
+        if not visible:
+            for parent in driver.find_elements(By.XPATH, "//*[normalize-space(text())='Мои задачи']"):
+                if parent.is_displayed():
+                    _hard_click(parent)
+                    time.sleep(1)
+                    break
+            links = driver.find_elements(By.XPATH, "//*[normalize-space(text())='Поручения']")
+            visible = [l for l in links if l.is_displayed()]
         if not visible:
             log("Ссылка 'Поручения' не найдена", "FAIL")
             shot("assignments_link_not_found")
@@ -1317,9 +1357,18 @@ def test_assignment_type_scenarios():
 def go_to_calendar():
     log("=" * 50)
     log("ПЕРЕХОД В КАЛЕНДАРЬ")
+    close_any_open_modal()
     try:
         links = driver.find_elements(By.XPATH, "//*[normalize-space(text())='Календарь']")
         visible = [l for l in links if l.is_displayed()]
+        if not visible:
+            for parent in driver.find_elements(By.XPATH, "//*[normalize-space(text())='Мои задачи']"):
+                if parent.is_displayed():
+                    _hard_click(parent)
+                    time.sleep(1)
+                    break
+            links = driver.find_elements(By.XPATH, "//*[normalize-space(text())='Календарь']")
+            visible = [l for l in links if l.is_displayed()]
         if not visible:
             log("Ссылка 'Календарь' не найдена", "FAIL")
             shot("calendar_link_not_found")
@@ -2969,55 +3018,55 @@ def save_report():
         safe_print(f">>> Report: {fp}")
     except Exception: pass
 
-    # ===== ОТПРАВКА В TELEGRAM =====
-    # 1. СНАЧАЛА — краткая сводка для тимлида (он видит её первой)
-    emoji = "✅" if f == 0 else ("🔥" if p == 0 else "⚠️")
+    # ===== ОТПРАВКА В TELEGRAM (стандартный формат RGB ERP) =====
+    total_checks = len(checklist_results)
+    passed_checks = sum(bool(item["passed"]) for item in checklist_results)
+    failed_items = [item for item in checklist_results if not item["passed"]]
 
-    # === СВОДКА В СТИЛЕ ОСТАЛЬНЫХ АВТОТЕСТОВ (Счёт/Договор) ===
-    # Если ВСЁ прошло успешно — только заголовок, без списка (список не
-    # нужен, когда и так всё ок). Если есть провалы — заголовок с ❌ и
-    # список ТОЛЬКО проваленных проверок (успешные не перечисляем) с
-    # причиной; на каждый провал уже отдельно отправлен скрин бага (см.
-    # report_to_sheet). Вердикт считается ПО ЧЕК-ЛИСТУ (checklist_results),
-    # а не по общему счётчику FAIL в логе — так посторонний технический
-    # FAIL внутри теста (не привязанный ни к одной проверке) не портит
-    # ложно общий вердикт.
-    all_checks_passed = (all(item["passed"] for item in checklist_results)
-                          if checklist_results else (f == 0))
-    status_ru = "УСПЕШНО" if all_checks_passed else "ЕСТЬ ОШИБКИ"
-    header_emoji = "✅" if all_checks_passed else "❌"
-
-    exec_lines = [f"{header_emoji} Автотест: Мои задачи (RGB ERP) — {status_ru}"]
-
-    if not all_checks_passed:
-        exec_lines.append("")
-        failed_items = [item for item in checklist_results if not item["passed"]]
-        if not failed_items:
-            exec_lines.append("Есть технические ошибки в логе, но ни одна проверка "
-                               "чек-листа не провалена явно — см. filter_report.txt")
-        else:
-            for item in failed_items:
-                reason = item["reason"] or "причина не определена в логе"
-                exec_lines.append(f"{item['name']}: Неуспешно. Причина: {reason}")
-
-    summary_text = "\n".join(exec_lines)
-    if len(summary_text) <= 3800:
-        tg_send(summary_text)
+    if checklist_results and not failed_items and f == 0:
+        tg_send(f"✅ <b>Автотест: Мои задачи — ВСЕ ПРОВЕРКИ ПРОЙДЕНЫ ({passed_checks}/{total_checks})</b>")
     else:
-        # На случай если список проверок не влезает в одно сообщение —
-        # режем по кускам, чтобы ни одна строка не потерялась.
-        chunk = 3800
-        parts = [summary_text[i:i+chunk] for i in range(0, len(summary_text), chunk)]
-        for part in parts:
-            tg_send(part)
+        emoji = "🔥" if failed_items else "⚠️"
+        title = "ЕСТЬ ОШИБКИ" if failed_items else "ВЫПОЛНЕН НЕ ПОЛНОСТЬЮ"
+        lines = [f"{emoji} <b>Автотест: Мои задачи — {title}</b> ({passed_checks}/{total_checks} успешно)", ""]
+        lines.append("<b>Этапы сценария:</b>")
+        idx = 1
+        for item in checklist_results:
+            name = item["name"]
+            if item["passed"]:
+                lines.append(f"{idx}. ✅ {name}")
+            else:
+                reason = item.get("reason") or "ошибка выполнения"
+                clean_reason = re.sub(r"^[⚠•✗\s]+", "", reason)[:180]
+                lines.append(f"{idx}. ❌ {name} — <i>{clean_reason}</i>")
+            idx += 1
 
-    # По просьбе — в Telegram уходит ТОЛЬКО чистая сводка выше (в стиле
-    # остальных автотестов: "Автотест: ... — статус" + построчно по каждой
-    # проверке). Короткое дублирующее сообщение со счётчиками Passed/
-    # Failed/Warnings, подробный сырой дамп лога и скриншоты больше НЕ
-    # отправляются в Telegram — сырой лог по-прежнему пишется в
-    # filter_report.txt, а скриншоты (shot()) сохраняются локально рядом
-    # со скриптом, этого достаточно для отладки при необходимости.
+        summary_text = "\n".join(lines)
+        if len(summary_text) <= 3800:
+            tg_send(summary_text)
+        else:
+            chunk = 3800
+            parts = [summary_text[i:i+chunk] for i in range(0, len(summary_text), chunk)]
+            for part in parts:
+                tg_send(part)
+
+        # Отправляем ровно ОДИН финальный скриншот при ошибках (как у всех модулей)
+        if failed_items:
+            last_shot = None
+            for item in reversed(checklist_results):
+                if not item["passed"]:
+                    safe_name = re.sub(r"[^0-9A-Za-zА-Яа-яЁё]+", "_", item["name"])[:40]
+                    cand = screen_path(f"scr_fail_{safe_name}.png")
+                    if os.path.exists(cand):
+                        last_shot = cand
+                        break
+            if not last_shot:
+                cand = screen_path("scr_final.png")
+                if os.path.exists(cand):
+                    last_shot = cand
+            if last_shot and os.path.exists(last_shot):
+                tg_photo(last_shot, caption="📸 Последний скриншот: Мои задачи")
+
     try:
         p = screen_path("scr_final.png")
         driver.save_screenshot(p)
@@ -3028,7 +3077,6 @@ def save_report():
 # ЗАПУСК
 # ==========================================
 try:
-    tg_send(f"🚀 <b>Запуск теста «Мои задачи»</b>\n🕐 {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}")
 
     if not run_login():
         save_report(); raise SystemExit("Login failed")

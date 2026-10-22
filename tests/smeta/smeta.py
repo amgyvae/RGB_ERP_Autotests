@@ -102,12 +102,12 @@ def init_driver():
     driver.implicitly_wait(0)
 
 
-login_val = env("RGB_ACCOUNT1_LOGIN", env("RGB_ACCOUNT3_LOGIN"))
-pass_val = env("RGB_ACCOUNT1_PASSWORD", env("RGB_ACCOUNT3_PASSWORD"))
+login_val = env("RGB_ACCOUNT1_LOGIN", "jyktmargyplay2@gmail.com")
+pass_val = env("RGB_ACCOUNT1_PASSWORD", env("RGB_ACCOUNT1_PASSWORD_ALT", "12341234"))
 
 # Утверждающий / подписант (Талгат Ерланович)
-SECOND_LOGIN = env("RGB_ACCOUNT3_LOGIN", env("RGB_ACCOUNT1_LOGIN"))
-SECOND_PASS = env("RGB_ACCOUNT3_PASSWORD", env("RGB_ACCOUNT1_PASSWORD_ALT"))
+SECOND_LOGIN = env("RGB_ACCOUNT3_LOGIN", "marshar244@gmail.com")
+SECOND_PASS = env("RGB_ACCOUNT3_PASSWORD", "12341234")
 
 BASE_URL = "https://testportal.rgbgroup.kz/"
 ESTIMATES_URL = BASE_URL + "estimates"
@@ -1190,9 +1190,8 @@ def lines_state():
 # ==========================================
 def stage_login():
     log(f"  URL: {driver.current_url}")
-    if is_login_page():
-        if not login_with(login_val, pass_val):
-            return False
+    if not ensure_account(login_val, pass_val):
+        return False
     driver.get(ESTIMATES_URL)
     wait_for_state(lambda: is_login_page() or smeta_list_ready())
     if is_login_page():

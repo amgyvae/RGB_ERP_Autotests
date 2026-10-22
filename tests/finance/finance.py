@@ -120,13 +120,15 @@ def init_driver():
     driver.implicitly_wait(0)
 
 
-# Согласующий (Ерлан Талгатович)
-login_val = env("RGB_ACCOUNT2_LOGIN", env("RGB_ACCOUNT1_LOGIN"))
-pass_val = env("RGB_ACCOUNT2_PASSWORD", env("RGB_ACCOUNT1_PASSWORD"))
+# Основной создатель (Account 1)
+login_val = env("RGB_ACCOUNT1_LOGIN", "jyktmargyplay2@gmail.com")
+pass_val = env("RGB_ACCOUNT1_PASSWORD", env("RGB_ACCOUNT1_PASSWORD_ALT", "12341234"))
+DDS_LOGIN = login_val
+DDS_PASS = pass_val
 
 # Утверждающий (Талгат Ерланович) 
-SECOND_LOGIN = env("RGB_ACCOUNT3_LOGIN", env("RGB_ACCOUNT1_LOGIN"))
-SECOND_PASS = env("RGB_ACCOUNT3_PASSWORD", env("RGB_ACCOUNT1_PASSWORD_ALT"))
+SECOND_LOGIN = env("RGB_ACCOUNT3_LOGIN", "marshar244@gmail.com")
+SECOND_PASS = env("RGB_ACCOUNT3_PASSWORD", "12341234")
 
 BASE_URL = "https://testportal.rgbgroup.kz/"
 CASHFLOW_URL = BASE_URL + "finance/cashflow"

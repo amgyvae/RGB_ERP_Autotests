@@ -96,8 +96,8 @@ def init_driver():
     )
     driver.implicitly_wait(0)
 
-login_val = env("RGB_ACCOUNT3_LOGIN", env("RGB_ACCOUNT1_LOGIN"))
-pass_val = env("RGB_ACCOUNT3_PASSWORD", env("RGB_ACCOUNT1_PASSWORD"))
+login_val = env("RGB_ACCOUNT1_LOGIN", "jyktmargyplay2@gmail.com")
+pass_val = env("RGB_ACCOUNT1_PASSWORD", env("RGB_ACCOUNT1_PASSWORD_ALT", "12341234"))
 
 BASE_URL = "https://testportal.rgbgroup.kz/"
 PROJECTS_URL = BASE_URL + "projects"
@@ -1446,6 +1446,15 @@ def validation_errors():
 # ==========================================
 def stage_login():
     log(f"  URL: {driver.current_url}")
+    # Проверяем, не залогинены ли под согласующим/утверждающим (Талгат / Ерлан)
+    page_txt = (driver.execute_script("return document.body.innerText;") or "").lower()
+    if any(w in page_txt for w in ("талгат", "ерлан", "алдажаров", "бейсембаев")):
+        log("  • Обнаружена сессия другого аккаунта, выполняем выход для входа под основным аккаунтом...", "INFO")
+        for b in driver.find_elements(By.XPATH, "//*[normalize-space(.)='Выйти'] | //button[contains(.,'Выйти')] | //a[contains(.,'Выйти')]"):
+            if b.is_displayed():
+                click_el(b)
+                time.sleep(2)
+                break
     if is_login_page():
         if not login_with(login_val, pass_val):
             return False
@@ -1457,7 +1466,11 @@ def stage_login():
     wait_for_state(lambda: is_login_page() or passport_list_ready(), timeout=25)
     dismiss_news_popup(wait=2)
     if is_login_page():
-        return False
+        if not login_with(login_val, pass_val):
+            return False
+        time.sleep(2)
+        driver.get(PROJECTS_URL)
+        wait_for_state(passport_list_ready, timeout=20)
     if "/projects" not in driver.current_url:
         try:
             click_text_deepest("Паспорта проектов", "exact")
