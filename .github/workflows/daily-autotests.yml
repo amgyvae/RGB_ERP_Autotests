@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       modules:
-        description: "Модули через запятую (all = все): contacts,passport,smeta,finance,tasks,gpr,contracts,waybills,invoices,acts"
+        description: "Модули через запятую (all = все): contacts,passport,smeta,finance,supply,quality,discussions,wiki,news,manager,tasks,gpr,contracts,waybills,invoices,acts"
         required: false
         default: "all"
       ncalayer:

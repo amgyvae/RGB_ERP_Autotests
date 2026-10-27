@@ -12,7 +12,7 @@ SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 # либо всё содержимое JSON в переменной GOOGLE_SERVICE_ACCOUNT_JSON (GitHub Secrets).
 CREDS_PATH = env("GOOGLE_SERVICE_ACCOUNT_FILE", "service_account.json")
 
-SPREADSHEET_ID = env("GOOGLE_SPREADSHEET_ID")  # из URL между /d/ и /edit
+SPREADSHEET_ID = env("GOOGLE_SPREADSHEET_ID", "1EoM1ckRUfeGoz0ag48F8VSGpL7OcpLjEXW6QFbijfZU")  # из URL между /d/ и /edit
 SHEET_NAME = "Чек-лист"
 
 HEADER_ROW = 3         # строка с заголовками колонок
@@ -29,7 +29,8 @@ ASSIGNMENT_ATTACHMENT_CHECK = "Создание поручения с вложе
 
 
 def _normalize_text(value):
-    return " ".join(str(value or "").split()).casefold()
+    tokens = str(value or "").split()
+    return " ".join(token for token in tokens if token not in ('—', '–', '-')).casefold()
 
 
 def _load_credentials():
@@ -40,12 +41,10 @@ def _load_credentials():
         except Exception as e:
             print(f"[sheet_reporter] Ошибка парсинга GOOGLE_SERVICE_ACCOUNT_JSON: {e}")
             return None
-    path = CREDS_PATH
-    if not os.path.isabs(path):
-        path = str(ROOT_DIR / path)
-    if not os.path.isfile(path):
-        return None
-    return Credentials.from_service_account_file(path, scopes=SCOPES)
+    for candidate in (CREDS_PATH, str(ROOT_DIR / CREDS_PATH), str(ROOT_DIR / "service_account.json"), str(ROOT_DIR / "config" / "service_account.json")):
+        if os.path.isfile(candidate):
+            return Credentials.from_service_account_file(candidate, scopes=SCOPES)
+    return None
 
 
 def _connect_with_retry(max_attempts=4):
@@ -112,6 +111,29 @@ def _find_row_by_task(ws, task_name: str, row_range=None):
     return _find_row_in_column(tasks_column, task_name, row_range=row_range)
 
 
+def _unmerged_row_spans(start, end, merges, columns):
+    """Rows safe to copy between individual columns without touching merged headers."""
+    blocked = []
+    for merged in merges:
+        left = merged.get('startColumnIndex', 0)
+        right = merged.get('endColumnIndex', max(columns) + 1)
+        if not any(left <= column < right for column in columns):
+            continue
+        lo = max(start, merged.get('startRowIndex', 0))
+        hi = min(end, merged.get('endRowIndex', end))
+        if lo < hi:
+            blocked.append((lo, hi))
+    spans = []
+    cursor = start
+    for lo, hi in sorted(blocked):
+        if cursor < lo:
+            spans.append((cursor, lo))
+        cursor = max(cursor, hi)
+    if cursor < end:
+        spans.append((cursor, end))
+    return spans
+
+
 def _find_or_create_date_column(ws, date_str: str, header_values=None) -> int:
     """Ищет колонку с такой датой в шапке (начиная с FIRST_RUN_COL).
     Если header_values не передан — читает шапку сама (1 запрос);
@@ -124,7 +146,7 @@ def _find_or_create_date_column(ws, date_str: str, header_values=None) -> int:
         i + 1 for i, value in enumerate(header_values)
         if _normalize_text(value) == "заполняемые поля"
     ]
-    first_run_col = max(fields_columns) + 1 if fields_columns else 3
+    first_run_col = max(FIRST_RUN_COL, max(fields_columns) + 1) if fields_columns else FIRST_RUN_COL
 
     for idx in range(first_run_col, len(header_values) + 1):
         if str(header_values[idx - 1] or "").strip() == date_str:
@@ -135,13 +157,22 @@ def _find_or_create_date_column(ws, date_str: str, header_values=None) -> int:
         ws.add_cols(new_col - ws.col_count)
     requests = []
     if new_col > first_run_col:
-        source = dict(sheetId=ws.id, startRowIndex=HEADER_ROW - 1,
-                      endRowIndex=ws.row_count, startColumnIndex=new_col - 2,
-                      endColumnIndex=new_col - 1)
-        destination = dict(source, startColumnIndex=new_col - 1, endColumnIndex=new_col)
-        for paste_type in ('PASTE_FORMAT', 'PASTE_DATA_VALIDATION'):
-            requests.append({'copyPaste': {'source': source, 'destination': destination,
-                                          'pasteType': paste_type}})
+        metadata = ws.spreadsheet.fetch_sheet_metadata(params={'fields': 'sheets(properties(sheetId),merges)'})
+        sheet = next((s for s in metadata.get('sheets', []) if s.get('properties', {}).get('sheetId') == ws.id), None)
+        if sheet is None:
+            raise ValueError('Не удалось прочитать объединённые ячейки целевого листа')
+        spans = _unmerged_row_spans(HEADER_ROW - 1, ws.row_count, sheet.get('merges', []), (new_col - 2, new_col - 1))
+        if not any(start <= HEADER_ROW - 1 < end for start, end in spans):
+            raise ValueError('Нельзя записать дату: ячейка заголовка входит в объединённый диапазон')
+        for start, end in spans:
+            source = dict(sheetId=ws.id, startRowIndex=start, endRowIndex=end,
+                          startColumnIndex=new_col - 2, endColumnIndex=new_col - 1)
+            destination = dict(source, startColumnIndex=new_col - 1, endColumnIndex=new_col)
+            for paste_type in ('PASTE_FORMAT', 'PASTE_DATA_VALIDATION'):
+                requests.append({'copyPaste': {'source': source, 'destination': destination, 'pasteType': paste_type}})
+        requests.append({'setDataValidation': {
+            'range': {'sheetId': ws.id, 'startRowIndex': HEADER_ROW - 1, 'endRowIndex': HEADER_ROW,
+                      'startColumnIndex': new_col - 1, 'endColumnIndex': new_col}}})
     requests.append({'updateDimensionProperties': {
         'range': {'sheetId': ws.id, 'dimension': 'COLUMNS',
                   'startIndex': new_col - 1, 'endIndex': new_col},
@@ -205,16 +236,17 @@ def report_results(findings, row_range=None):
               run_and_collect() в run_workflow_and_report.py.
     """
     if not findings:
-        return
+        return {'written': 0}
 
     ws = _connect()
     if ws is None:
-        return
+        return {'written': len(findings), 'skipped_no_creds': True}
     tasks_column = ws.col_values(COL_TASK)          # 1 запрос на чтение (а не N)
     header_values = ws.row_values(HEADER_ROW)        # 1 запрос на чтение (а не N)
 
     status_map = {True: "Успешно (Автотест)", False: "Не успешно (Автотест)"}
     resolved = []
+    missing = []
     for task_name, passed in findings:
         print(f"[sheet_reporter] Ищу задачу: '{task_name}'" +
               (f" (строки {row_range[0]}-{row_range[1]})" if row_range else ""))
@@ -222,12 +254,15 @@ def report_results(findings, row_range=None):
         if row is None:
             print(f"[sheet_reporter] Задача '{task_name}' не найдена в колонке B"
                   + (f" в диапазоне строк {row_range}" if row_range else "") + ", пропуск")
+            missing.append(task_name)
             continue
         status = status_map[bool(passed)]
         resolved.append((task_name, row, status))
 
+    if missing:
+        raise ValueError('Результаты не записаны: не найдены строки чек-листа: ' + '; '.join(missing))
     if not resolved:
-        return
+        return {'written': 0}
     today = datetime.now().strftime("%d.%m.%Y")
     col = _find_or_create_date_column(ws, today, header_values=header_values)
     cells_to_update = [gspread.Cell(row, col, status) for _, row, status in resolved]
@@ -237,10 +272,16 @@ def report_results(findings, row_range=None):
         for attempt in range(4):
             try:
                 ws.update_cells(cells_to_update)
+                addresses = [gspread.utils.rowcol_to_a1(row, col) for _, row, _ in resolved]
+                actual = ws.batch_get(addresses, value_render_option='UNFORMATTED_VALUE')
+                if len(actual) != len(resolved) or any(
+                        len(values) != 1 or len(values[0]) != 1 or values[0][0] != status
+                        for values, (_, _, status) in zip(actual, resolved)):
+                    raise RuntimeError('Google Sheets: контрольное чтение не подтвердило все записанные результаты')
                 for task_name, row, status in resolved:
                     print(f"[sheet_reporter] Готово: '{task_name}' -> {status} "
                           f"(строка {row}, колонка {col}, дата {today})")
-                break
+                return {'written': len(resolved), 'date': today, 'column': col, 'rows': [row for _, row, _ in resolved]}
             except gspread.exceptions.APIError as e:
                 if "429" in str(e) and attempt < 3:
                     wait = 15 * (attempt + 1)

@@ -1,4 +1,10 @@
 
+import sys as _sys
+from pathlib import Path as _Path
+_ROOT = _Path(__file__).resolve().parent.parent.parent
+for _d in (_ROOT, _ROOT / "core", _ROOT / "config", _Path(__file__).resolve().parent):
+    if str(_d) not in _sys.path:
+        _sys.path.insert(0, str(_d))
 from artifact_paths import SCREENS_DIR, LOGS_DIR, screen_path, log_path
 from env_config import env, env_list, is_headless  # секреты — из .env / GitHub Secrets
 # -*- coding: utf-8 -*-

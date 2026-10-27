@@ -29,16 +29,22 @@ MODULE_TIMEOUT = 3 * 60 * 60  # 3 часа на модуль
 
 # ключ: (название, команда, нужен ли NCALayer / ЭЦП)
 MODULES = {
-    "contacts":  ("Контакты",                [RUNNER, os.path.join("tests", "contacts", "contacts_test.py")],               False),
-    "passport":  ("Паспорт проектов",        [RUNNER, os.path.join("tests", "passport", "pasportProjects.py")],             False),
-    "smeta":     ("Смета",                   [RUNNER, os.path.join("tests", "smeta", "smeta.py")],                          False),
-    "finance":   ("Финансы (ДДС / ГФР)",     [RUNNER, os.path.join("tests", "finance", "finance.py")],                      False),
-    "tasks":     ("Задачи и поручения",      [os.path.join("tests", "tasks", "zadashi.py")],                                False),
-    "gpr":       ("ГПР",                     [RUNNER, os.path.join("tests", "gpr", "gpr_test.py")],                         True),
-    "contracts": ("Договоры",                [RUNNER, os.path.join("tests", "contracts", "contract_workflow_new_design.py")], True),
-    "waybills":  ("Накладные",               [RUNNER, os.path.join("tests", "waybills", "waybill_workflow_new_design.py")],  True),
-    "invoices":  ("Счета на оплату",         [RUNNER, os.path.join("tests", "invoices", "invoice_workflow_ecp.py")],         True),
-    "acts":      ("Акты (АВР, КС-2, Ф-2В)",  [RUNNER, os.path.join("tests", "acts", "test-akt.py")],                         True),
+    "contacts":    ("Контакты",                [RUNNER, os.path.join("tests", "contacts", "contacts_test.py")],                 False),
+    "passport":    ("Паспорт проектов",        [RUNNER, os.path.join("tests", "passport", "pasportProjects.py")],               False),
+    "smeta":       ("Смета",                   [RUNNER, os.path.join("tests", "smeta", "smeta.py")],                            False),
+    "finance":     ("Финансы (ДДС / ГФР)",     [RUNNER, os.path.join("tests", "finance", "finance.py")],                        False),
+    "supply":      ("Снабжение",               [RUNNER, os.path.join("tests", "supply", "supply.py")],                          False),
+    "quality":     ("Контроль качества",       [RUNNER, os.path.join("tests", "quality", "quality.py")],                        False),
+    "discussions": ("Обсуждения",              [RUNNER, os.path.join("tests", "discussions", "obsuzhdenie.py")],                False),
+    "wiki":        ("База знаний WIKI",        [RUNNER, os.path.join("tests", "wiki", "wiki.py")],                              False),
+    "news":        ("Лента новостей",          [RUNNER, os.path.join("tests", "news", "news.py")],                              False),
+    "manager":     ("Панель руководителя",     [RUNNER, os.path.join("tests", "manager", "panelrukovoditelya.py")],             False),
+    "tasks":       ("Задачи и поручения",      [os.path.join("tests", "tasks", "zadashi.py")],                                  False),
+    "gpr":         ("ГПР",                     [RUNNER, os.path.join("tests", "gpr", "gpr_test.py")],                           True),
+    "contracts":   ("Договоры",                [RUNNER, os.path.join("tests", "contracts", "contract_workflow_new_design.py")], True),
+    "waybills":    ("Накладные",               [RUNNER, os.path.join("tests", "waybills", "waybill_workflow_new_design.py")],   True),
+    "invoices":    ("Счета на оплату",         [RUNNER, os.path.join("tests", "invoices", "invoice_workflow_ecp.py")],          True),
+    "acts":        ("Акты (АВР, КС-2, Ф-2В)",  [RUNNER, os.path.join("tests", "acts", "test-akt.py")],                          True),
 }
 
 
@@ -96,7 +102,7 @@ def main():
 
     if args.list:
         for key, (title, command, nca) in MODULES.items():
-            print(f"{key:10} {title:28} {' '.join(command):45} {'NCALayer' if nca else 'web'}")
+            print(f"{key:12} {title:28} {' '.join(command):55} {'NCALayer' if nca else 'web'}")
         return 0
 
     if args.matrix is not None:

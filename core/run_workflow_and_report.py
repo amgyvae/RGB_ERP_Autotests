@@ -48,6 +48,12 @@ TG_API = f"https://api.telegram.org/bot{TG_TOKEN}"
 
 # Человекочитаемые названия модулей для сообщений в Telegram
 MODULE_LABELS = {
+    "panelrukovoditelya.py": "Панель руководителя",
+    "news.py": "Лента новостей",
+    "wiki.py": "WIKI",
+    "obsuzhdenie.py": "Обсуждения",
+    "quality.py": "Контроль качества",
+    "supply.py": "Снабжение",
     "pasportProjects.py": "Паспорт проектов",
     "smeta.py": "Смета",
     "finance.py": "Финансы",
@@ -641,14 +647,26 @@ def run_structured_workflow(script_path, args, module_key, checks_file, row_rang
     if not checks_candidate.exists():
         checks_candidate = Path(__file__).resolve().parent / checks_file
     expected = json.loads(checks_candidate.read_text(encoding='utf-8'))
+    selective_quality = False
+    if module_key == 'QUALITY':
+        from quality_selection import fixed_only, selected_quality_checks
+        try:
+            expected = selected_quality_checks(expected, args)
+        except ValueError as exc:
+            send_telegram_summary(script.name, [], {}, skipped=[], error=str(exc))
+            return 2
+        selective_quality = fixed_only(args)
     run_id = uuid.uuid4().hex
     result_path = LOGS_DIR / f'{script.stem}_results_{run_id}.json'
     log_path = LOGS_DIR / f'{script.stem}_console_{run_id}.txt'
-    env = dict(os.environ, PYTHONIOENCODING='utf-8')
+    pp_dirs = [str(ROOT_DIR), str(ROOT_DIR / 'core'), str(ROOT_DIR / 'config'), str(script.parent)]
+    if os.environ.get('PYTHONPATH'):
+        pp_dirs.append(os.environ['PYTHONPATH'])
+    env = dict(os.environ, PYTHONIOENCODING='utf-8', PYTHONPATH=os.pathsep.join(pp_dirs))
     env.update({module_key + '_MANAGED': '1', module_key + '_RUN_ID': run_id,
                 module_key + '_RESULT_PATH': str(result_path)})
     env.pop(module_key + '_NO_RUN', None)
-    rows, skipped, payload = [], expected, {}
+    rows, skipped, payload = [], ([] if selective_quality else expected), {}
     run_error = sheet_error = ''
     try:
         completed = contacts_stream([sys.executable, '-u', str(script), *args], ROOT_DIR, env,
@@ -663,7 +681,9 @@ def run_structured_workflow(script_path, args, module_key, checks_file, row_rang
     findings = [(row['name'], row['ok']) for row in rows]
     if findings:
         try:
-            report_results(findings, row_range=row_range)
+            written = report_results(findings, row_range=row_range)
+            if not written or written.get('written') != len(findings):
+                sheet_error = 'VerificationError'
         except Exception as exc:
             sheet_error = type(exc).__name__
     screenshot = ""
@@ -685,6 +705,7 @@ def run_structured_workflow(script_path, args, module_key, checks_file, row_rang
         return 2
     return 1 if skipped or any(not r['ok'] for r in rows) else 0
 
+
 def run_finance(script_path, args):
     return run_structured_workflow(script_path, args, 'FINANCE', 'finance_checks.json', (240, 266))
 
@@ -693,12 +714,47 @@ def run_smeta(script_path, args):
     return run_structured_workflow(script_path, args, 'SMETA', 'smeta_checks.json', (269, 289))
 
 
-
 def run_passport(script_path, args):
     return run_structured_workflow(script_path, args, 'PASSPORT', 'passport_checks.json', (291, 303))
 
 
+def run_supply(script_path, args):
+    return run_structured_workflow(script_path, args, 'SUPPLY', 'supply_checks.json', (305, 330))
+
+
+def run_quality(script_path, args):
+    return run_structured_workflow(script_path, args, 'QUALITY', 'quality_checks.json', (332, 366))
+
+
+def run_discussions(script_path, args):
+    return run_structured_workflow(script_path, args, 'DISCUSSIONS', 'discussions_checks.json', (369, 386))
+
+
+def run_wiki(script_path, args):
+    return run_structured_workflow(script_path, args, 'WIKI', 'wiki_checks.json', (389, 399))
+
+
+def run_news(script_path, args):
+    return run_structured_workflow(script_path, args, 'NEWS', 'news_checks.json', (402, 418))
+
+
+def run_manager(script_path, args):
+    return run_structured_workflow(script_path, args, 'MANAGER', 'manager_checks.json', (421, 436))
+
+
 def main():
+    if len(sys.argv) >= 2 and os.path.basename(sys.argv[1]).lower() == "panelrukovoditelya.py":
+        raise SystemExit(run_manager(sys.argv[1], sys.argv[2:]))
+    if len(sys.argv) >= 2 and os.path.basename(sys.argv[1]).lower() == "news.py":
+        raise SystemExit(run_news(sys.argv[1], sys.argv[2:]))
+    if len(sys.argv) >= 2 and os.path.basename(sys.argv[1]).lower() == "wiki.py":
+        raise SystemExit(run_wiki(sys.argv[1], sys.argv[2:]))
+    if len(sys.argv) >= 2 and os.path.basename(sys.argv[1]).lower() == "obsuzhdenie.py":
+        raise SystemExit(run_discussions(sys.argv[1], sys.argv[2:]))
+    if len(sys.argv) >= 2 and os.path.basename(sys.argv[1]).lower() == "quality.py":
+        raise SystemExit(run_quality(sys.argv[1], sys.argv[2:]))
+    if len(sys.argv) >= 2 and os.path.basename(sys.argv[1]).lower() == "supply.py":
+        raise SystemExit(run_supply(sys.argv[1], sys.argv[2:]))
     if len(sys.argv) >= 2 and os.path.basename(sys.argv[1]).lower() == "pasportprojects.py":
         raise SystemExit(run_passport(sys.argv[1], sys.argv[2:]))
     if len(sys.argv) >= 2 and os.path.basename(sys.argv[1]).lower() == "smeta.py":
