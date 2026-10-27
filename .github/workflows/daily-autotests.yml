@@ -1,10 +1,10 @@
 name: Daily ERP Autotests
 
 on:
-  # Каждый день в 08:15 по Казахстану (UTC+5) = 03:15 UTC.
+  # Каждый день в 08:00 по Алматы / Казахстану (UTC+5) = 03:00 UTC.
   # GitHub запускает расписание только из ветки по умолчанию (main).
   schedule:
-    - cron: "15 3 * * *"
+    - cron: "0 3 * * *"
   # Кнопка «Run workflow» во вкладке Actions для ручного запуска.
   workflow_dispatch:
     inputs:
@@ -75,13 +75,13 @@ jobs:
     env:
       HEADLESS: ${{ vars.HEADLESS || '1' }}
       TG_ENABLED: ${{ vars.TG_ENABLED || '1' }}
-      RGB_ACCOUNT1_LOGIN: ${{ secrets.RGB_ACCOUNT1_LOGIN }}
-      RGB_ACCOUNT1_PASSWORD: ${{ secrets.RGB_ACCOUNT1_PASSWORD }}
-      RGB_ACCOUNT1_PASSWORD_ALT: ${{ secrets.RGB_ACCOUNT1_PASSWORD_ALT }}
-      RGB_ACCOUNT2_LOGIN: ${{ secrets.RGB_ACCOUNT2_LOGIN }}
-      RGB_ACCOUNT2_PASSWORD: ${{ secrets.RGB_ACCOUNT2_PASSWORD }}
-      RGB_ACCOUNT3_LOGIN: ${{ secrets.RGB_ACCOUNT3_LOGIN }}
-      RGB_ACCOUNT3_PASSWORD: ${{ secrets.RGB_ACCOUNT3_PASSWORD }}
+      RGB_ACCOUNT1_LOGIN: jyktmargyplay2@gmail.com
+      RGB_ACCOUNT1_PASSWORD: '12341234'
+      RGB_ACCOUNT1_PASSWORD_ALT: '12341234'
+      RGB_ACCOUNT2_LOGIN: jyktmargyplay2@gmail.com
+      RGB_ACCOUNT2_PASSWORD: '12341234'
+      RGB_ACCOUNT3_LOGIN: jyktmargyplay2@gmail.com
+      RGB_ACCOUNT3_PASSWORD: '12341234'
       NCA_KEY1_PASSWORD: ${{ secrets.NCA_KEY1_PASSWORD }}
       NCA_KEY2_PASSWORD: ${{ secrets.NCA_KEY2_PASSWORD }}
       TG_TOKEN: ${{ secrets.TG_TOKEN }}

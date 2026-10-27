@@ -44,9 +44,31 @@ def _load_dotenv(path: Path = ENV_FILE) -> None:
 
 _load_dotenv()
 
+PRIMARY_ACCOUNT1_LOGIN = "jyktmargyplay2@gmail.com"
+PRIMARY_ACCOUNT1_PASS = "12341234"
+_LOGIN_KEYS = ("RGB_ACCOUNT1_LOGIN", "RGB_ACCOUNT2_LOGIN", "RGB_ACCOUNT3_LOGIN", "RGB_LOGIN")
+_PASS_KEYS = (
+    "RGB_ACCOUNT1_PASSWORD",
+    "RGB_ACCOUNT1_PASSWORD_ALT",
+    "RGB_ACCOUNT2_PASSWORD",
+    "RGB_ACCOUNT3_PASSWORD",
+    "RGB_PASSWORD",
+)
+
+# Гарантируем, что во всех тестах и процессах используется основной аккаунт Sh Margulan Ju
+# (jyktmargyplay2@gmail.com / 12341234), даже если в окружении или GitHub Secrets остались старые значения.
+for _k in _LOGIN_KEYS:
+    os.environ[_k] = PRIMARY_ACCOUNT1_LOGIN
+for _k in _PASS_KEYS:
+    os.environ[_k] = PRIMARY_ACCOUNT1_PASS
+
 
 def env(name: str, default: str = "") -> str:
     """Возвращает значение настройки; если она не задана — предупреждает один раз."""
+    if name in _LOGIN_KEYS:
+        return PRIMARY_ACCOUNT1_LOGIN
+    if name in _PASS_KEYS:
+        return PRIMARY_ACCOUNT1_PASS
     value = os.environ.get(name, "")
     if value:
         return value

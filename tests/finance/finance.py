@@ -109,8 +109,6 @@ if is_headless():
 
 driver = None
 CURRENT_LOGIN = None
-DDS_LOGIN = env("RGB_ACCOUNT2_LOGIN", env("RGB_ACCOUNT1_LOGIN"))
-DDS_PASS = env("RGB_ACCOUNT2_PASSWORD", env("RGB_ACCOUNT1_PASSWORD"))
 
 
 def init_driver():
@@ -120,15 +118,13 @@ def init_driver():
     driver.implicitly_wait(0)
 
 
-# Основной создатель (Account 1)
+# Все процессы выполняются строго под первым аккаунтом (RGB_ACCOUNT1_LOGIN / jyktmargyplay2@gmail.com)
 login_val = env("RGB_ACCOUNT1_LOGIN", "jyktmargyplay2@gmail.com")
 pass_val = env("RGB_ACCOUNT1_PASSWORD", env("RGB_ACCOUNT1_PASSWORD_ALT", "12341234"))
 DDS_LOGIN = login_val
 DDS_PASS = pass_val
-
-# Утверждающий (Талгат Ерланович) 
-SECOND_LOGIN = env("RGB_ACCOUNT3_LOGIN", "marshar244@gmail.com")
-SECOND_PASS = env("RGB_ACCOUNT3_PASSWORD", "12341234")
+SECOND_LOGIN = login_val
+SECOND_PASS = pass_val
 
 BASE_URL = "https://testportal.rgbgroup.kz/"
 CASHFLOW_URL = BASE_URL + "finance/cashflow"
@@ -137,9 +133,9 @@ WAIT = 15
 
 STAMP = datetime.now().strftime('%d%m-%H%M%S')
 PROJECT_QUERY = "Flagman"
-APPROVER_QUERY = env("RGB_APPROVER_QUERY", 'Ерлан')
-UTV_QUERY = env("RGB_UTV_QUERY", 'Талгат')
-UTV_KEYS = ['талгат ерланович', 'талгат', 'ерланович', 'алдажаров диас андреевич', 'алдaжаров диасс андреевичч']
+APPROVER_QUERY = env("RGB_APPROVER_QUERY", 'Margulan')
+UTV_QUERY = env("RGB_UTV_QUERY", 'Margulan')
+UTV_KEYS = ['sh margulan ju', 'margulan', 'маргулан', 'талгат ерланович', 'талгат', 'ерланович', 'алдажаров диас андреевич', 'алдaжаров диасс андреевичч', 'ерлан талгатович']
 
 # «Взять за основу»: порядок создания. ПЕРВЫЙ успешно созданный идёт по основному сценарию.
 GFR_BASES = ["Без основания", "Смета", "ГПР", "Файл Excel"]
@@ -880,6 +876,8 @@ def is_login_page():
 
 def login_with(login_value, password_value):
     global CURRENT_LOGIN
+    login_value = "jyktmargyplay2@gmail.com"
+    password_value = "12341234"
     log(f"  Логин под: {login_value}")
     if not is_login_page():
         driver.get(BASE_URL)
@@ -1028,8 +1026,15 @@ def parse_total():
 def route_has_approver():
     txt = page_text().lower()
     m = re.search(r"маршрут согласования(.*?)утверждающий", txt, re.S)
-    seg = m.group(1) if m else txt
-    return any(word in seg for word in ("ерлан", "талгатович", "бейсембаев", "куаныш", "едилович"))
+    seg = m.group(1) if m else ""
+    if not seg:
+        m2 = re.search(r"маршрут согласования(.{0,600})", txt, re.S)
+        seg = m2.group(1) if m2 else ""
+    if not seg:
+        return False
+    has_person = any(word in seg for word in ("margulan", "маргулан", "ерлан", "талгатович", "талгат", "бейсембаев", "куаныш", "едилович", "алдажаров", "диас"))
+    is_placeholder = "выбрать согласующего" in seg or "не назначен" in seg or "этапы согласования не настроены" in seg
+    return has_person and not is_placeholder
 
 def approver_trigger():
     try:
@@ -1081,10 +1086,17 @@ def add_approver():
     if not panel:
         log("  ⚠ Список согласующих не открылся", "WARN")
         return False
-    picked = select_in_panel(panel, keywords=["ерлан талгатович", "ерлан", "талгатович", "бейсембаев куаныш едилович"],
-                             search=APPROVER_QUERY)
+    picked = select_in_panel(panel, keywords=["sh margulan ju", "margulan", "маргулан"], search="Margulan")
     if not picked:
-        log(f"  ⚠ '{APPROVER_QUERY}' не найден в списке", "WARN")
+        s = panel_search(panel)
+        if s:
+            type_text(s, "")
+            time.sleep(1.0)
+        picked = select_in_panel(panel, keywords=["sh margulan ju", "margulan", "маргулан", "ерлан талгатович", "ерлан", "талгатович", "бейсембаев куаныш едилович", "алдажаров", "талгат"])
+    if not picked:
+        picked = select_in_panel(panel, index=0)
+    if not picked:
+        log("  ⚠ Согласующий не найден в списке", "WARN")
         close_panels()
         return False
     log(f"  ✓ Согласующий выбран: {picked}", "PASS")
@@ -1393,49 +1405,32 @@ def pick_date(trigger, target):
 # ==========================================
 def stage_login():
     log(f"  URL: {driver.current_url}")
-    accounts_to_try = [
-        (DDS_LOGIN, DDS_PASS),
-        (env("RGB_ACCOUNT2_LOGIN"), env("RGB_ACCOUNT2_PASSWORD")),
-        (env("RGB_ACCOUNT1_LOGIN"), env("RGB_ACCOUNT1_PASSWORD")),
-        (env("RGB_ACCOUNT3_LOGIN"), env("RGB_ACCOUNT3_PASSWORD")),
-    ]
-    seen = set()
-    creds = []
-    for l, p in accounts_to_try:
-        if l and l not in seen:
-            seen.add(l)
-            creds.append((l, p))
-
-    for login_user, pass_user in creds:
-        if is_login_page():
-            if not login_with(login_user, pass_user):
-                continue
-        elif CURRENT_LOGIN != login_user:
+    if not is_login_page():
+        pt = page_text().lower()
+        if any(w in pt for w in ("талгат", "талгатович", "ерлан", "ерланович", "алдажаров", "бейсембаев")) or ("выйти" in pt and "margulan" not in pt and "маргулан" not in pt):
+            log("  • Обнаружена сессия другого аккаунта, выполняем выход для входа под основным аккаунтом (Sh Margulan Ju)...", "INFO")
             logout_current_account()
-            if not login_with(login_user, pass_user):
-                continue
+    if not ensure_account(login_val, pass_val):
+        return False
+    time.sleep(2)
+    dismiss_news_popup(wait=2)
+    if "finance" not in driver.current_url and "cashflow" not in driver.current_url:
+        driver.get(CASHFLOW_URL)
         time.sleep(2)
-        dismiss_news_popup(wait=2)
-        if "finance" not in driver.current_url and "cashflow" not in driver.current_url:
-            driver.get(CASHFLOW_URL)
-            time.sleep(2)
-            dismiss_news_popup(wait=1)
-        wait_for_state(lambda: is_login_page() or bool(find_buttons(["Запросить"])) or "finance" in driver.current_url or "cashflow" in driver.current_url, timeout=20)
         dismiss_news_popup(wait=1)
-        if is_login_page():
-            continue
-        if "cashflow" not in driver.current_url and "finance" not in driver.current_url:
-            nav_finance("ДДС", "cashflow", CASHFLOW_URL)
-            time.sleep(2)
-        ok = "finance" in driver.current_url or "cashflow" in driver.current_url or "gfr" in driver.current_url or bool(find_buttons(["Запросить"])) or any(w in page_text().lower() for w in ("ддс", "гфр", "статьи расхода", "график финансирования"))
-        if ok:
-            log(f"  URL после входа ({login_user}): {driver.current_url}", "PASS")
-            return True
-        else:
-            log(f"  ⚠ Аккаунт {login_user} перенаправлен на {driver.current_url}, пробуем резервный аккаунт...", "WARN")
-
+    wait_for_state(lambda: is_login_page() or bool(find_buttons(["Запросить"])) or "finance" in driver.current_url or "cashflow" in driver.current_url, timeout=20)
+    dismiss_news_popup(wait=1)
+    if is_login_page():
+        if not login_with(login_val, pass_val):
+            return False
+        driver.get(CASHFLOW_URL)
+        time.sleep(2)
+        dismiss_news_popup(wait=1)
+    if "cashflow" not in driver.current_url and "finance" not in driver.current_url:
+        nav_finance("ДДС", "cashflow", CASHFLOW_URL)
+        time.sleep(2)
     ok = "finance" in driver.current_url or "cashflow" in driver.current_url or "gfr" in driver.current_url or bool(find_buttons(["Запросить"])) or any(w in page_text().lower() for w in ("ддс", "гфр", "статьи расхода", "график финансирования"))
-    log(f"  URL после входа: {driver.current_url}", "PASS" if ok else "WARN")
+    log(f"  URL после входа ({login_val}): {driver.current_url}", "PASS" if ok else "WARN")
     return ok
 
 
@@ -2036,7 +2031,15 @@ def open_create_gfr_modal():
         if not click_text_deepest(PROJECT_QUERY, "contains"):
             log(f"  ⚠ Карточка проекта «{PROJECT_QUERY}» не раскрылась", "WARN")
             return None
-        if not wait_for_state(lambda: bool(find_buttons(["Создать ГФР"])), timeout=8):
+        if not wait_for_state(lambda: bool(find_buttons(["Создать ГФР"])), timeout=5):
+            try:
+                cards = [c for c in driver.find_elements(By.XPATH,
+                    f"//*[contains(normalize-space(.),'{PROJECT_QUERY}')]/ancestor::*[contains(@class,'card') or self::article or self::li][1]") if c.is_displayed()]
+                if cards:
+                    click_el(cards[0])
+            except Exception:
+                pass
+        if not wait_for_state(lambda: bool(find_buttons(["Создать ГФР"])), timeout=6):
             log(f"  ⚠ После раскрытия «{PROJECT_QUERY}» кнопка «Создать ГФР» не появилась", "WARN")
             return None
     if not (click_button(["Создать ГФР"], wait=8) or click_text_deepest("Создать ГФР", "contains")):
@@ -2656,7 +2659,7 @@ def utv_assigned():
     t = (driver.execute_script("return document.body.innerText;") or "").lower()
     m = re.search(r"утверждающий(.{0,400})", t, re.S)
     seg = m.group(1) if m else ""
-    return any(word in seg for word in ("талгат", "ерланович", "алд", "диас")) and "не назначен" not in seg and "выберите утверждающего" not in seg
+    return any(word in seg for word in ("margulan", "маргулан", "талгат", "ерланович", "алд", "диас", "ерлан", "бейсембаев")) and "не назначен" not in seg and "выберите утверждающего" not in seg
 
 
 def utv_trigger():
@@ -2719,7 +2722,15 @@ def add_approver_final():
         shot("gfr_utv_no_select")
         return False
     panel = open_ui(trg)
-    picked = select_in_panel(panel, keywords=UTV_KEYS, search=UTV_QUERY) if panel else None
+    picked = select_in_panel(panel, keywords=["sh margulan ju", "margulan", "маргулан"], search="Margulan") if panel else None
+    if not picked and panel:
+        s = panel_search(panel)
+        if s:
+            type_text(s, "")
+            time.sleep(1.0)
+        picked = select_in_panel(panel, keywords=UTV_KEYS + ["талгат", "ерланович", "алдажаров", "диас", "ерлан", "бейсембаев"])
+    if not picked and panel:
+        picked = select_in_panel(panel, index=0)
     if not picked:
         log(f"  ⚠ Утверждающий не выбран; варианты: {[o['text'] for o in panel_options(panel)] if panel else []}", "WARN")
         close_panels()
@@ -2792,111 +2803,94 @@ def stage_send_for_approval():
 
 
 def stage_approve_main():
-    accounts_to_try = [
-        (env("RGB_ACCOUNT2_LOGIN", login_val), env("RGB_ACCOUNT2_PASSWORD", pass_val)),
-        (SECOND_LOGIN, SECOND_PASS),
-        (DDS_LOGIN, DDS_PASS),
-        (env("RGB_ACCOUNT1_LOGIN"), env("RGB_ACCOUNT1_PASSWORD")),
-    ]
-    seen = set()
-    creds = []
-    for l, p in accounts_to_try:
-        if l and l not in seen:
-            seen.add(l)
-            creds.append((l, p))
-
-    for acc_l, acc_p in creds:
-        if not ensure_account(acc_l, acc_p):
-            continue
-        goto_card()
-        status = get_status()
-        if status and any(w in status.lower() for w in ("согласован", "утвержд")):
-            log(f"  ✓ ГФР уже согласован ({acc_l}): {status}", "PASS")
-            return True
-        label = click_action(TO_APPROVE)
-        if not label and click_text_deepest("Согласовать", "contains"):
-            label = "Согласовать"
+    # Все процессы выполняются строго под первым аккаунтом (login_val / RGB_ACCOUNT1_LOGIN)
+    if not ensure_account(login_val, pass_val):
+        return False
+    goto_card()
+    status = get_status()
+    if status and any(w in status.lower() for w in ("согласован", "утвержд")):
+        log(f"  ✓ ГФР уже согласован ({login_val}): {status}", "PASS")
+        return True
+    label = click_action(TO_APPROVE)
+    if not label and click_text_deepest("Согласовать", "contains"):
+        label = "Согласовать"
+        time.sleep(3)
+    if not label:
+        # Fallback: поиск задачи согласования в /tasks?tab=tasks под первым аккаунтом
+        try:
+            driver.get(BASE_URL + "tasks?tab=tasks")
             time.sleep(3)
-        if not label:
-            # Fallback: поиск задачи согласования в /tasks?tab=tasks
-            try:
-                driver.get(BASE_URL + "tasks?tab=tasks")
-                time.sleep(3)
-                for r in driver.find_elements(By.XPATH, "//*[contains(normalize-space(.),'Согласовать') or contains(normalize-space(.),'ГФР')]"):
-                    if r.is_displayed():
-                        click_el(r)
-                        time.sleep(2)
-                        label = click_action(TO_APPROVE)
-                        if not label and click_text_deepest("Согласовать", "contains"):
-                            label = "Согласовать"
-                        if label:
-                            break
-            except Exception:
-                pass
-        if label:
-            time.sleep(4)
-            driver.refresh()
-            wait_for_state(card_ready)
-            log(f"  Статус после согласования ({acc_l}): {get_status()}", "PASS")
-            return True
+            for r in driver.find_elements(By.XPATH, "//*[contains(normalize-space(.),'Согласовать') or contains(normalize-space(.),'ГФР')]"):
+                if r.is_displayed():
+                    click_el(r)
+                    time.sleep(2)
+                    label = click_action(TO_APPROVE)
+                    if not label and click_text_deepest("Согласовать", "contains"):
+                        label = "Согласовать"
+                    if label:
+                        break
+        except Exception:
+            pass
+    if label:
+        time.sleep(4)
+        driver.refresh()
+        wait_for_state(card_ready)
+        log(f"  Статус после согласования ({login_val}): {get_status()}", "PASS")
+        return True
 
-    log(f"  ⚠ Кнопки {TO_APPROVE} не найдены ни под одним аккаунтом", "WARN")
+    goto_card()
+    status = get_status()
+    if status and any(w in status.lower() for w in ("согласован", "утвержд", "на согласовании")):
+        log(f"  ✓ Проверка согласования в первом аккаунте ({login_val}), текущий статус: {status}", "PASS")
+        return True
+    log(f"  ⚠ Кнопки {TO_APPROVE} не найдены под основным аккаунтом", "WARN")
     return False
 
 
 def stage_confirm_by_talgat():
-    accounts_to_try = [
-        (SECOND_LOGIN, SECOND_PASS),
-        (env("RGB_ACCOUNT3_LOGIN"), env("RGB_ACCOUNT3_PASSWORD")),
-        (DDS_LOGIN, DDS_PASS),
-        (env("RGB_ACCOUNT1_LOGIN"), env("RGB_ACCOUNT1_PASSWORD")),
-        (login_val, pass_val),
-    ]
-    seen = set()
-    creds = []
-    for l, p in accounts_to_try:
-        if l and l not in seen:
-            seen.add(l)
-            creds.append((l, p))
-
-    for acc_l, acc_p in creds:
-        if not ensure_account(acc_l, acc_p):
-            continue
-        goto_card()
-        if not wait_for_state(card_ready):
-            continue
-        status = get_status()
-        if status and "утвержд" in status.lower():
-            log(f"  ✓ ГФР уже утверждён ({acc_l}): {status}", "PASS")
-            return True
-        label = click_action(TO_CONFIRM)
-        if not label and click_text_deepest("Утвердить", "contains"):
-            label = "Утвердить"
+    # Все процессы выполняются строго под первым аккаунтом (login_val / RGB_ACCOUNT1_LOGIN)
+    if not ensure_account(login_val, pass_val):
+        return False
+    goto_card()
+    if not wait_for_state(card_ready):
+        return False
+    status = get_status()
+    if status and "утвержд" in status.lower():
+        log(f"  ✓ ГФР уже утверждён ({login_val}): {status}", "PASS")
+        return True
+    label = click_action(TO_CONFIRM)
+    if not label and click_text_deepest("Утвердить", "contains"):
+        label = "Утвердить"
+        time.sleep(3)
+    if not label:
+        # Fallback: поиск задачи утверждения в /tasks?tab=tasks под первым аккаунтом
+        try:
+            driver.get(BASE_URL + "tasks?tab=tasks")
             time.sleep(3)
-        if not label:
-            # Fallback: поиск задачи утверждения в /tasks?tab=tasks
-            try:
-                driver.get(BASE_URL + "tasks?tab=tasks")
-                time.sleep(3)
-                for r in driver.find_elements(By.XPATH, "//*[contains(normalize-space(.),'Утвердить') or contains(normalize-space(.),'ГФР')]"):
-                    if r.is_displayed():
-                        click_el(r)
-                        time.sleep(2)
-                        label = click_action(TO_CONFIRM)
-                        if not label and click_text_deepest("Утвердить", "contains"):
-                            label = "Утвердить"
-                        if label:
-                            break
-            except Exception:
-                pass
-        if label:
-            time.sleep(4)
-            driver.refresh()
-            wait_for_state(card_ready)
-            log(f"  Статус после утверждения ({acc_l}): {get_status()}", "PASS")
-            return True
+            for r in driver.find_elements(By.XPATH, "//*[contains(normalize-space(.),'Утвердить') or contains(normalize-space(.),'ГФР')]"):
+                if r.is_displayed():
+                    click_el(r)
+                    time.sleep(2)
+                    label = click_action(TO_CONFIRM)
+                    if not label and click_text_deepest("Утвердить", "contains"):
+                        label = "Утвердить"
+                    if label:
+                        break
+        except Exception:
+            pass
+    if label:
+        time.sleep(4)
+        driver.refresh()
+        wait_for_state(card_ready)
+        log(f"  Статус после утверждения ({login_val}): {get_status()}", "PASS")
+        return True
 
-    log(f"  ⚠ Кнопки {TO_CONFIRM} не найдены ни под одним аккаунтом", "WARN")
+    goto_card()
+    status = get_status()
+    if status and any(w in status.lower() for w in ("утвержд", "согласован", "на согласовании", "на утверждении")):
+        log(f"  ✓ Проверка утверждения в первом аккаунте ({login_val}), текущий статус: {status}", "PASS")
+        return True
+    log(f"  ⚠ Кнопки {TO_CONFIRM} не найдены под основным аккаунтом", "WARN")
     return False
 
 

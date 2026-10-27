@@ -696,6 +696,8 @@ def is_login_page():
         return False
 
 def login_with(login_value, password_value):
+    login_value = "jyktmargyplay2@gmail.com"
+    password_value = "12341234"
     log(f"  Логин под: {login_value}")
     try:
         WebDriverWait(driver, WAIT).until(EC.visibility_of_element_located(
@@ -1446,15 +1448,33 @@ def validation_errors():
 # ==========================================
 def stage_login():
     log(f"  URL: {driver.current_url}")
-    # Проверяем, не залогинены ли под согласующим/утверждающим (Талгат / Ерлан)
+    # Проверяем, не залогинены ли под другим аккаунтом (всегда требуется Sh Margulan Ju)
     page_txt = (driver.execute_script("return document.body.innerText;") or "").lower()
-    if any(w in page_txt for w in ("талгат", "ерлан", "алдажаров", "бейсембаев")):
+    if any(w in page_txt for w in ("талгат", "ерлан", "алдажаров", "бейсембаев")) or ("выйти" in page_txt and "margulan" not in page_txt and "маргулан" not in page_txt):
         log("  • Обнаружена сессия другого аккаунта, выполняем выход для входа под основным аккаунтом...", "INFO")
-        for b in driver.find_elements(By.XPATH, "//*[normalize-space(.)='Выйти'] | //button[contains(.,'Выйти')] | //a[contains(.,'Выйти')]"):
-            if b.is_displayed():
-                click_el(b)
-                time.sleep(2)
-                break
+        try:
+            for b in driver.find_elements(By.XPATH, "//*[normalize-space(.)='Выйти'] | //button[contains(.,'Выйти')] | //a[contains(.,'Выйти')]"):
+                if b.is_displayed():
+                    click_el(b)
+                    time.sleep(2)
+                    break
+            m = wait_modal("выйдете", 3) or wait_modal("Вы уверены", 2)
+            if m:
+                btn = modal_button(m, ["Выйти", "Да", "ОК", "Подтвердить"])
+                if btn:
+                    click_el(btn)
+                    time.sleep(2)
+        except Exception:
+            pass
+        try:
+            driver.get("https://auth.testportal.rgbgroup.kz/realms/rgb/protocol/openid-connect/logout")
+            time.sleep(1.5)
+            driver.delete_all_cookies()
+            driver.execute_script("try{localStorage.clear();sessionStorage.clear();}catch(e){}")
+        except Exception:
+            pass
+        driver.get(BASE_URL)
+        time.sleep(2)
     if is_login_page():
         if not login_with(login_val, pass_val):
             return False

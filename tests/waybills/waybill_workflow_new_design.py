@@ -90,8 +90,8 @@ driver.implicitly_wait(0)  # ВАЖНО: было 3 — при большом к
 # каждая неудачная попытка молча ждала до 3 секунд лишних. Явные
 # ожидания (time.sleep/WebDriverWait) в коде расставлены сами, этого
 # достаточно.
-login_val = env("RGB_ACCOUNT1_LOGIN")
-pass_val = env("RGB_ACCOUNT1_PASSWORD")
+login_val = env("RGB_ACCOUNT1_LOGIN", "jyktmargyplay2@gmail.com")
+pass_val = env("RGB_ACCOUNT1_PASSWORD", env("RGB_ACCOUNT1_PASSWORD_ALT", "12341234"))
 
 # ЭЦП первого подписанта
 NCA_PASSWORD = env("NCA_KEY1_PASSWORD")

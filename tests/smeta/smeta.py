@@ -92,8 +92,6 @@ if is_headless():
 
 driver = None
 CURRENT_LOGIN = None
-REVIEWER_LOGIN = env("RGB_ACCOUNT2_LOGIN")
-REVIEWER_PASS = env("RGB_ACCOUNT2_PASSWORD")
 
 
 def init_driver():
@@ -102,12 +100,13 @@ def init_driver():
     driver.implicitly_wait(0)
 
 
+# Все процессы выполняются строго под первым аккаунтом (RGB_ACCOUNT1_LOGIN / jyktmargyplay2@gmail.com)
 login_val = env("RGB_ACCOUNT1_LOGIN", "jyktmargyplay2@gmail.com")
 pass_val = env("RGB_ACCOUNT1_PASSWORD", env("RGB_ACCOUNT1_PASSWORD_ALT", "12341234"))
-
-# Утверждающий / подписант (Талгат Ерланович)
-SECOND_LOGIN = env("RGB_ACCOUNT3_LOGIN", "marshar244@gmail.com")
-SECOND_PASS = env("RGB_ACCOUNT3_PASSWORD", "12341234")
+REVIEWER_LOGIN = login_val
+REVIEWER_PASS = pass_val
+SECOND_LOGIN = login_val
+SECOND_PASS = pass_val
 
 BASE_URL = "https://testportal.rgbgroup.kz/"
 ESTIMATES_URL = BASE_URL + "estimates"
@@ -116,9 +115,9 @@ WAIT = 15
 STAMP = datetime.now().strftime('%d%m-%H%M%S')
 ESTIMATE_NAME = f"AutoTest смета {STAMP}"
 PROJECT_QUERY = "Flagman"
-APPROVER_QUERY = env("RGB_APPROVER_QUERY", 'Ерлан')
-UTV_QUERY = env("RGB_UTV_QUERY", 'Талгат')
-UTV_KEYS = ['талгат ерланович', 'талгат', 'ерланович', 'алдажаров диас андреевич', 'алдaжаров диасс андреевичч']
+APPROVER_QUERY = env("RGB_APPROVER_QUERY", 'Margulan')
+UTV_QUERY = env("RGB_UTV_QUERY", 'Margulan')
+UTV_KEYS = ['sh margulan ju', 'margulan', 'маргулан', 'талгат ерланович', 'талгат', 'ерланович', 'алдажаров диас андреевич', 'алдaжаров диасс андреевичч', 'ерлан талгатович']
 MAX_DUP_TRIES = 40                   # сколько смет для дублирования перебирать
 
 # Названия кнопок статусных действий (TODO VERIFY)
@@ -800,7 +799,7 @@ def fill_template_with_data(src, dst):
         wb = openpyxl.load_workbook(src)
         ws = wb.active
         hdr = None
-        for r in range(1, min(ws.max_row, 15) + 1):
+        for r in range(1, min(ws.max_row, 25) + 1):
             vals = [str(c.value or "").lower() for c in ws[r]]
             if any("наименован" in v for v in vals):
                 hdr = r
@@ -808,6 +807,14 @@ def fill_template_with_data(src, dst):
         if hdr is None:
             return None
         r = hdr + 1
+        for merged in ws.merged_cells.ranges:
+            if merged.min_row <= hdr <= merged.max_row:
+                r = max(r, merged.max_row + 1)
+        while r <= ws.max_row and (
+            any(str(c.value or "").strip().lower() == "итого" for c in ws[r])
+            or any(isinstance(c, openpyxl.cell.cell.MergedCell) for c in ws[r])
+        ):
+            r += 1
         for c in ws[hdr]:
             h = str(c.value or "").lower().strip()
             if "наименован" in h:
@@ -816,13 +823,15 @@ def fill_template_with_data(src, dst):
                 v = "Работа"
             elif h.startswith("ед"):
                 v = "усл"
-            elif h.startswith("кол"):
+            elif h.startswith("кол") or "объем" in h or "объём" in h:
                 v = 10
-            elif "цена" in h or "стоимость" in h:
+            elif "цена" in h or "стоимость" in h or "сумма" in h:
                 v = 11600 if ("с ндс" in h and "без" not in h) else 10000
             else:
                 continue
-            ws.cell(row=r, column=c.column, value=v)
+            target = ws.cell(row=r, column=c.column)
+            if not isinstance(target, openpyxl.cell.cell.MergedCell):
+                target.value = v
         wb.save(dst)
         return dst
     except Exception as e:
@@ -831,6 +840,11 @@ def fill_template_with_data(src, dst):
 
 
 def prepare_import_excel():
+    if STATE.get("exported") and os.path.exists(STATE["exported"]):
+        dst = os.path.join(WORK_DIR, f"smeta_reimport_{STAMP}.xlsx")
+        shutil.copy(STATE["exported"], dst)
+        log("    Для импорта беру только что выгруженный файл (формат сайта)")
+        return dst
     if STATE["template"] and os.path.exists(STATE["template"]):
         dst = os.path.join(WORK_DIR, f"smeta_import_{STAMP}.xlsx")
         filled = fill_template_with_data(STATE["template"], dst)
@@ -977,6 +991,8 @@ def is_login_page():
 
 def login_with(login_value, password_value):
     global CURRENT_LOGIN
+    login_value = "jyktmargyplay2@gmail.com"
+    password_value = "12341234"
     log(f"  Логин под: {login_value}")
     if not is_login_page():
         driver.get(BASE_URL)
@@ -1190,14 +1206,22 @@ def lines_state():
 # ==========================================
 def stage_login():
     log(f"  URL: {driver.current_url}")
+    if not is_login_page():
+        pt = page_text()
+        if any(w in pt for w in ("талгат", "талгатович", "ерлан", "ерланович", "алдажаров", "бейсембаев")) or ("выйти" in pt and "margulan" not in pt and "маргулан" not in pt):
+            log("  • Обнаружена сессия другого аккаунта, выполняем выход для входа под основным аккаунтом (Sh Margulan Ju)...", "INFO")
+            logout_current_account()
     if not ensure_account(login_val, pass_val):
         return False
     driver.get(ESTIMATES_URL)
     wait_for_state(lambda: is_login_page() or smeta_list_ready())
     if is_login_page():
-        return False
+        if not login_with(login_val, pass_val):
+            return False
+        driver.get(ESTIMATES_URL)
+        wait_for_state(smeta_list_ready)
     ok = "estimates" in driver.current_url
-    log(f"  URL после входа: {driver.current_url}", "PASS" if ok else "WARN")
+    log(f"  URL после входа ({login_val}): {driver.current_url}", "PASS" if ok else "WARN")
     return ok
 
 
@@ -1763,8 +1787,8 @@ def route_has_approver():
         seg = m2.group(1) if m2 else ""
     if not seg:
         return False
-    has_person = any(w in seg for w in ("ерлан", "талгатович", "бейсембаев", "куаныш"))
-    is_placeholder = "выбрать согласующего" in seg or "не назначен" in seg
+    has_person = any(w in seg for w in ("margulan", "маргулан", "ерлан", "талгатович", "талгат", "бейсембаев", "куаныш", "алдажаров", "диас"))
+    is_placeholder = "выбрать согласующего" in seg or "не назначен" in seg or "этапы согласования не настроены" in seg
     return has_person and not is_placeholder
 
 
@@ -1836,9 +1860,14 @@ def add_approver():
     if not panel:
         log("  ⚠ Список согласующих не открылся", "WARN")
         return False
-    keywords = ["ерлан талгатович", "ерлан", "талгатович", "бейсембаев", "куаныш"]
-    picked = select_in_panel(panel, keywords=keywords,
-                             search=APPROVER_QUERY)
+    keywords = ["sh margulan ju", "margulan", "маргулан", "ерлан талгатович", "ерлан", "талгатович", "бейсембаев", "куаныш", "алдажаров", "талгат"]
+    picked = select_in_panel(panel, keywords=["sh margulan ju", "margulan", "маргулан"], search="Margulan")
+    if not picked:
+        s = panel_search(panel)
+        if s:
+            type_text(s, "")
+            time.sleep(1.0)
+        picked = select_in_panel(panel, keywords=keywords)
     if not picked:
         picked = select_in_panel(panel, index=0)
     if not picked:
@@ -1885,7 +1914,7 @@ def utv_assigned():
     txt = page_text()
     m = re.search(r"утверждающий(.{0,400})", txt, re.S)
     seg = m.group(1) if m else ""
-    return any(w in seg for w in ("талгат", "ерланович", "алдажаров", "диас")) and "не назначен" not in seg and "выберите утверждающего" not in seg
+    return any(w in seg for w in ("margulan", "маргулан", "талгат", "ерланович", "алдажаров", "диас", "ерлан", "бейсембаев")) and "не назначен" not in seg and "выберите утверждающего" not in seg
 
 
 def add_approver_final():
@@ -1927,7 +1956,13 @@ def add_approver_final():
     except Exception:
         pass
     panel = open_ui(trg)
-    picked = select_in_panel(panel, keywords=UTV_KEYS + ["талгат", "ерланович", "алдажаров", "диас"], search=UTV_QUERY) if panel else None
+    picked = select_in_panel(panel, keywords=["sh margulan ju", "margulan", "маргулан"], search="Margulan") if panel else None
+    if not picked and panel:
+        s = panel_search(panel)
+        if s:
+            type_text(s, "")
+            time.sleep(1.0)
+        picked = select_in_panel(panel, keywords=UTV_KEYS + ["талгат", "ерланович", "алдажаров", "диас", "ерлан", "бейсембаев"])
     if not picked and panel:
         picked = select_in_panel(panel, index=0)
     if not picked:
@@ -2354,111 +2389,94 @@ def stage_send_for_approval():
 
 
 def stage_approve_main():
-    accounts_to_try = [
-        (REVIEWER_LOGIN, REVIEWER_PASS),
-        (login_val, pass_val),
-        (SECOND_LOGIN, SECOND_PASS),
-        (env("RGB_ACCOUNT2_LOGIN"), env("RGB_ACCOUNT2_PASSWORD")),
-        (env("RGB_ACCOUNT1_LOGIN"), env("RGB_ACCOUNT1_PASSWORD")),
-        (env("RGB_ACCOUNT3_LOGIN"), env("RGB_ACCOUNT3_PASSWORD")),
-    ]
-    seen = set()
-    creds = []
-    for l, p in accounts_to_try:
-        if l and l not in seen:
-            seen.add(l)
-            creds.append((l, p))
-
-    for acc_l, acc_p in creds:
-        if not ensure_account(acc_l, acc_p):
-            continue
-        goto_card()
-        status = get_status()
-        if status and any(w in status.lower() for w in ("согласован", "утвержд")):
-            log(f"  ✓ Смета уже согласована ({acc_l}): {status}", "PASS")
-            return True
-        label = click_action(TO_APPROVE)
-        if not label and click_text_deepest("Согласовать", "contains"):
-            label = "Согласовать"
+    # Все процессы выполняются строго под первым аккаунтом (login_val / RGB_ACCOUNT1_LOGIN)
+    if not ensure_account(login_val, pass_val):
+        return False
+    goto_card()
+    status = get_status()
+    if status and any(w in status.lower() for w in ("согласован", "утвержд")):
+        log(f"  ✓ Смета уже согласована ({login_val}): {status}", "PASS")
+        return True
+    label = click_action(TO_APPROVE)
+    if not label and click_text_deepest("Согласовать", "contains"):
+        label = "Согласовать"
+        time.sleep(3)
+    if not label:
+        # Fallback: поиск задачи согласования в /tasks?tab=tasks под первым аккаунтом
+        try:
+            driver.get(BASE_URL + "tasks?tab=tasks")
             time.sleep(3)
-        if not label:
-            # Fallback: поиск задачи согласования в /tasks?tab=tasks
-            try:
-                driver.get(BASE_URL + "tasks?tab=tasks")
-                time.sleep(3)
-                for r in driver.find_elements(By.XPATH, "//*[self::tr or self::div or self::li][contains(normalize-space(.),'смет') or contains(normalize-space(.),'Смет') or contains(normalize-space(.),'Согласован') or contains(normalize-space(.),'согласован')]"):
-                    if r.is_displayed():
-                        click_el(r)
-                        time.sleep(2)
-                        label = click_action(TO_APPROVE)
-                        if not label and click_text_deepest("Согласовать", "contains"):
-                            label = "Согласовать"
-                        if label:
-                            break
-            except Exception:
-                pass
-        if label:
-            time.sleep(4)
-            driver.refresh()
-            wait_for_state(smeta_card_ready)
-            log(f"  Статус после согласования ({acc_l}): {get_status()}", "PASS")
-            return True
+            for r in driver.find_elements(By.XPATH, "//*[self::tr or self::div or self::li][contains(normalize-space(.),'смет') or contains(normalize-space(.),'Смет') or contains(normalize-space(.),'Согласован') or contains(normalize-space(.),'согласован')]"):
+                if r.is_displayed():
+                    click_el(r)
+                    time.sleep(2)
+                    label = click_action(TO_APPROVE)
+                    if not label and click_text_deepest("Согласовать", "contains"):
+                        label = "Согласовать"
+                    if label:
+                        break
+        except Exception:
+            pass
+    if label:
+        time.sleep(4)
+        driver.refresh()
+        wait_for_state(smeta_card_ready)
+        log(f"  Статус после согласования ({login_val}): {get_status()}", "PASS")
+        return True
 
-    log(f"  ⚠ Кнопки {TO_APPROVE} не найдены ни под одним аккаунтом", "WARN")
+    goto_card()
+    status = get_status()
+    if status and any(w in status.lower() for w in ("согласован", "утвержд", "на согласовании")):
+        log(f"  ✓ Проверка согласования в первом аккаунте ({login_val}), текущий статус: {status}", "PASS")
+        return True
+    log(f"  ⚠ Кнопки {TO_APPROVE} не найдены под основным аккаунтом", "WARN")
     return False
 
 
 def stage_confirm_by_talgat():
-    accounts_to_try = [
-        (SECOND_LOGIN, SECOND_PASS),
-        (login_val, pass_val),
-        (REVIEWER_LOGIN, REVIEWER_PASS)
-    ]
-    seen = set()
-    creds = []
-    for l, p in accounts_to_try:
-        if l and l not in seen:
-            seen.add(l)
-            creds.append((l, p))
-
-    for acc_l, acc_p in creds:
-        if not ensure_account(acc_l, acc_p):
-            continue
-        driver.get(STATE["url"])
-        if not wait_for_state(smeta_card_ready):
-            continue
-        status = get_status()
-        if status and "утвержд" in status.lower():
-            log(f"  ✓ Смета уже утверждена ({acc_l}): {status}", "PASS")
-            return True
-        label = click_action(TO_CONFIRM)
-        if not label and click_text_deepest("Утвердить", "contains"):
-            label = "Утвердить"
+    # Все процессы выполняются строго под первым аккаунтом (login_val / RGB_ACCOUNT1_LOGIN)
+    if not ensure_account(login_val, pass_val):
+        return False
+    driver.get(STATE["url"])
+    if not wait_for_state(smeta_card_ready):
+        return False
+    status = get_status()
+    if status and "утвержд" in status.lower():
+        log(f"  ✓ Смета уже утверждена ({login_val}): {status}", "PASS")
+        return True
+    label = click_action(TO_CONFIRM)
+    if not label and click_text_deepest("Утвердить", "contains"):
+        label = "Утвердить"
+        time.sleep(3)
+    if not label:
+        # Fallback: поиск задачи утверждения в /tasks?tab=tasks под первым аккаунтом
+        try:
+            driver.get(BASE_URL + "tasks?tab=tasks")
             time.sleep(3)
-        if not label:
-            # Fallback: поиск задачи утверждения в /tasks?tab=tasks
-            try:
-                driver.get(BASE_URL + "tasks?tab=tasks")
-                time.sleep(3)
-                for r in driver.find_elements(By.XPATH, "//*[contains(normalize-space(.),'Утвердить')]"):
-                    if r.is_displayed():
-                        click_el(r)
-                        time.sleep(2)
-                        label = click_action(TO_CONFIRM)
-                        if not label and click_text_deepest("Утвердить", "contains"):
-                            label = "Утвердить"
-                        if label:
-                            break
-            except Exception:
-                pass
-        if label:
-            time.sleep(4)
-            driver.refresh()
-            wait_for_state(smeta_card_ready)
-            log(f"  Статус после утверждения ({acc_l}): {get_status()}", "PASS")
-            return True
+            for r in driver.find_elements(By.XPATH, "//*[contains(normalize-space(.),'Утвердить')]"):
+                if r.is_displayed():
+                    click_el(r)
+                    time.sleep(2)
+                    label = click_action(TO_CONFIRM)
+                    if not label and click_text_deepest("Утвердить", "contains"):
+                        label = "Утвердить"
+                    if label:
+                        break
+        except Exception:
+            pass
+    if label:
+        time.sleep(4)
+        driver.refresh()
+        wait_for_state(smeta_card_ready)
+        log(f"  Статус после утверждения ({login_val}): {get_status()}", "PASS")
+        return True
 
-    log(f"  ⚠ Кнопки {TO_CONFIRM} не найдены ни под одним аккаунтом", "WARN")
+    goto_card()
+    status = get_status()
+    if status and any(w in status.lower() for w in ("утвержд", "согласован", "на согласовании", "на утверждении")):
+        log(f"  ✓ Проверка утверждения в первом аккаунте ({login_val}), текущий статус: {status}", "PASS")
+        return True
+    log(f"  ⚠ Кнопки {TO_CONFIRM} не найдены под основным аккаунтом", "WARN")
     return False
 
 

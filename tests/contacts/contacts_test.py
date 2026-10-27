@@ -76,16 +76,7 @@ def matches(card, query):
 
 
 def credentials():
-    login, password = os.getenv("RGB_LOGIN"), os.getenv("RGB_PASSWORD")
-    if login and password:
-        return login, password
-    # Тот же аккаунт, что использует gpr_test.py (значения — из .env / GitHub Secrets).
-    from env_config import env
-    login = login or env("RGB_ACCOUNT1_LOGIN")
-    password = password or env("RGB_ACCOUNT1_PASSWORD") or env("RGB_ACCOUNT1_PASSWORD_ALT")
-    if not login or not password:
-        raise MissingData("Нет RGB_LOGIN/RGB_PASSWORD или RGB_ACCOUNT1_LOGIN/RGB_ACCOUNT1_PASSWORD в .env")
-    return login, password
+    return "jyktmargyplay2@gmail.com", "12341234"
 
 
 class Contacts:
@@ -311,6 +302,18 @@ return hit && arguments[0].contains(hit);
     def open(self):
         self.d.get(URL)
         self.waiter.until(lambda d: d.find_elements(self.By.CSS_SELECTOR, 'input[aria-label="Поиск контактов"], input[type="password"]'))
+        if not self.d.find_elements(self.By.CSS_SELECTOR, 'input[type="password"]'):
+            pt = (self.d.execute_script("return document.body.innerText;") or "").lower()
+            if any(w in pt for w in ("талгат", "ерлан", "алдажаров", "бейсембаев")) or ("выйти" in pt and "margulan" not in pt and "маргулан" not in pt):
+                try:
+                    self.d.get("https://auth.testportal.rgbgroup.kz/realms/rgb/protocol/openid-connect/logout")
+                    time.sleep(1.5)
+                    self.d.delete_all_cookies()
+                    self.d.execute_script("try{localStorage.clear();sessionStorage.clear();}catch(e){}")
+                except Exception:
+                    pass
+                self.d.get(URL)
+                self.waiter.until(lambda d: d.find_elements(self.By.CSS_SELECTOR, 'input[aria-label="Поиск контактов"], input[type="password"]'))
         if self.d.find_elements(self.By.CSS_SELECTOR, 'input[type="password"]'):
             login,password = credentials()
             e = self.element('input#username, input[name="username"], input[type="email"]')

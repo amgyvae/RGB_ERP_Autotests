@@ -983,15 +983,32 @@ def run_login():
     driver.get(BASE_URL)
     time.sleep(2)
 
-    # Проверяем, не залогинены ли под согласующим/утверждающим (Талгат / Ерлан)
+    # Проверяем, не залогинены ли под другим аккаунтом (всегда требуется Sh Margulan Ju)
     page_txt = (driver.execute_script("return document.body.innerText;") or "").lower()
-    if any(w in page_txt for w in ("талгат", "ерлан", "алдажаров", "бейсембаев")):
+    if any(w in page_txt for w in ("талгат", "ерлан", "алдажаров", "бейсембаев")) or ("выйти" in page_txt and "margulan" not in page_txt and "маргулан" not in page_txt):
         log("Обнаружена сессия другого аккаунта, выполняем выход для входа под основным аккаунтом...", "INFO")
-        for b in driver.find_elements(By.XPATH, "//*[normalize-space(.)='Выйти'] | //button[contains(.,'Выйти')] | //a[contains(.,'Выйти')]"):
-            if b.is_displayed():
-                _hard_click(b)
-                time.sleep(2)
-                break
+        try:
+            for b in driver.find_elements(By.XPATH, "//*[normalize-space(.)='Выйти'] | //button[contains(.,'Выйти')] | //a[contains(.,'Выйти')]"):
+                if b.is_displayed():
+                    _hard_click(b)
+                    time.sleep(2)
+                    break
+            for mb in driver.find_elements(By.XPATH, "//div[@role='dialog' or @aria-modal='true']//button[normalize-space(.)='Выйти' or normalize-space(.)='Да']"):
+                if mb.is_displayed():
+                    _hard_click(mb)
+                    time.sleep(2)
+                    break
+        except Exception:
+            pass
+        try:
+            driver.get("https://auth.testportal.rgbgroup.kz/realms/rgb/protocol/openid-connect/logout")
+            time.sleep(1.5)
+            driver.delete_all_cookies()
+            driver.execute_script("try{localStorage.clear();sessionStorage.clear();}catch(e){}")
+        except Exception:
+            pass
+        driver.get(BASE_URL)
+        time.sleep(2)
 
     if "tab=" in driver.current_url and not any(w in (driver.execute_script("return document.body.innerText;") or "").lower() for w in ("талгат", "ерлан")):
         log(f"Уже авторизованы под основным аккаунтом ({login_val})", "PASS")
@@ -3024,11 +3041,13 @@ def save_report():
     failed_items = [item for item in checklist_results if not item["passed"]]
 
     if checklist_results and not failed_items and f == 0:
-        tg_send(f"✅ <b>Автотест: Мои задачи — ВСЕ ПРОВЕРКИ ПРОЙДЕНЫ ({passed_checks}/{total_checks})</b>")
+        lines = [f"✅ <b>Автотест: Мои задачи — УСПЕШНО</b> ({passed_checks}/{total_checks})", ""]
     else:
         emoji = "🔥" if failed_items else "⚠️"
         title = "ЕСТЬ ОШИБКИ" if failed_items else "ВЫПОЛНЕН НЕ ПОЛНОСТЬЮ"
         lines = [f"{emoji} <b>Автотест: Мои задачи — {title}</b> ({passed_checks}/{total_checks} успешно)", ""]
+
+    if checklist_results:
         lines.append("<b>Этапы сценария:</b>")
         idx = 1
         for item in checklist_results:

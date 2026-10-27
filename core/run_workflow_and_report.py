@@ -400,12 +400,11 @@ def send_telegram_summary(script_name: str, findings: list, reasons: dict,
     failed_items = [(name, reasons.get(name)) for name, ok in findings if not ok]
 
     if findings and not failed_items and not skipped and not error and (not sheet_error or sheet_error == "FileNotFoundError"):
-        tg_send(f"✅ <b>Автотест: {escape(module_label)} — УСПЕШНО</b> ({passed_checks}/{total_checks})")
-        return
-
-    emoji = "🔥" if (failed_items or error) else "⚠️"
-    title = "ЕСТЬ ОШИБКИ" if (failed_items or error) else "ВЫПОЛНЕН НЕ ПОЛНОСТЬЮ"
-    lines = [f"{emoji} <b>Автотест: {escape(module_label)} — {title}</b> ({passed_checks}/{total_checks} успешно)", ""]
+        lines = [f"✅ <b>Автотест: {escape(module_label)} — УСПЕШНО</b> ({passed_checks}/{total_checks})", ""]
+    else:
+        emoji = "🔥" if (failed_items or error) else "⚠️"
+        title = "ЕСТЬ ОШИБКИ" if (failed_items or error) else "ВЫПОЛНЕН НЕ ПОЛНОСТЬЮ"
+        lines = [f"{emoji} <b>Автотест: {escape(module_label)} — {title}</b> ({passed_checks}/{total_checks} успешно)", ""]
 
     if error:
         lines.append("❌ <b>Ошибка запуска:</b> " + escape(_clean_reason(error)))
@@ -498,26 +497,34 @@ def contacts_summary(results, script_path=None):
     skipped = [r for r in results if r['status'] == 'SKIP']
 
     if not failed and not skipped:
-        return [f"✅ <b>Автотест: Контакты — УСПЕШНО</b> ({passed_count}/{total_count})"]
+        lines = [f"✅ <b>Автотест: Контакты — УСПЕШНО</b> ({passed_count}/{total_count})", ""]
+    else:
+        icon = '🔥' if failed else '⚠️'
+        title = 'ЕСТЬ ОШИБКИ' if failed else 'ВЫПОЛНЕН НЕ ПОЛНОСТЬЮ'
+        lines = [f"{icon} <b>Автотест: Контакты — {title}</b> ({passed_count}/{total_count} успешно)", ""]
 
-    icon = '🔥' if failed else '⚠️'
-    title = 'ЕСТЬ ОШИБКИ' if failed else 'ВЫПОЛНЕН НЕ ПОЛНОСТЬЮ'
-    lines = [f"{icon} <b>Автотест: Контакты — {title}</b> ({passed_count}/{total_count} успешно)", ""]
-
-    for r in failed:
+    lines.append("<b>Этапы сценария:</b>")
+    for idx, r in enumerate(results, 1):
+        name = escape(checks[r['id'] - 1]['name'])
+        st = r['status']
         reason = _clean_reason(r.get('reason', ''))
-        lines.append(f"❌ {escape(checks[r['id'] - 1]['name'])}" + (f" — {escape(reason)}" if reason else ""))
-
-    if skipped:
-        if len(skipped) > 3:
-            sample_reason = _clean_reason(skipped[0].get('reason', ''))
-            lines.append(f"⏭ Пропущено проверок: {len(skipped)}" + (f" ({escape(sample_reason)})" if sample_reason else ""))
+        if st == 'PASS':
+            lines.append(f"{idx}. ✅ {name}")
+        elif st == 'FAIL':
+            lines.append(f"{idx}. ❌ {name}" + (f" — <i>{escape(reason)}</i>" if reason else ""))
         else:
-            for r in skipped:
-                reason = _clean_reason(r.get('reason', ''))
-                lines.append(f"⏭ Пропущено: {escape(checks[r['id'] - 1]['name'])}" + (f" — {escape(reason)}" if reason else ""))
+            lines.append(f"{idx}. ⏸ {name}" + (f" — <i>{escape(reason)}</i>" if reason else " (пропущен)"))
 
-    return ["\n".join(lines)]
+    messages = []
+    current = ""
+    for line in lines:
+        if len(current) + len(line) + 1 > 3800:
+            messages.append(current)
+            current = ""
+        current += ("\n" if current else "") + line
+    if current:
+        messages.append(current)
+    return messages
 
 def contacts_current_screenshot(results, run_id):
     root = (SCREENS_DIR / 'contacts' / run_id).resolve()

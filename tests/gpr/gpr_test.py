@@ -40,8 +40,8 @@ driver = webdriver.Chrome(
 )
 # Ожидания выполняются явно; быстрые проверки отсутствия не блокируются.
 driver.implicitly_wait(0)
-login_val = env("RGB_ACCOUNT1_LOGIN")
-pass_val = env("RGB_ACCOUNT1_PASSWORD_ALT")
+login_val = env("RGB_ACCOUNT1_LOGIN", "jyktmargyplay2@gmail.com")
+pass_val = env("RGB_ACCOUNT1_PASSWORD", env("RGB_ACCOUNT1_PASSWORD_ALT", "12341234"))
 
 SECOND_LOGIN = env("RGB_ACCOUNT2_LOGIN")
 SECOND_PASS = env("RGB_ACCOUNT2_PASSWORD")

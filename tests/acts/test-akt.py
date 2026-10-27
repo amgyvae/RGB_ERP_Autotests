@@ -113,8 +113,8 @@ driver.implicitly_wait(0)  # сразу 0, а не 3 — см. пояснени�
 
 # Основной аккаунт-создатель — Алдажа Диас Андреевич (у него права на
 # создание документов, как и в договоре/счёте)
-login_val = env("RGB_ACCOUNT1_LOGIN")
-pass_val = env("RGB_ACCOUNT1_PASSWORD_ALT")
+login_val = env("RGB_ACCOUNT1_LOGIN", "jyktmargyplay2@gmail.com")
+pass_val = env("RGB_ACCOUNT1_PASSWORD", env("RGB_ACCOUNT1_PASSWORD_ALT", "12341234"))
 
 # --- ЭЦП первого подписанта ---
 NCA_PASSWORD = env("NCA_KEY1_PASSWORD")
