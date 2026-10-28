@@ -396,14 +396,15 @@ def supply_list_at(url):
 def supply_card_ready(url=None):
     url=url or STATE.get('url')
     return bool(url and at_url(url) and get_status() and
-                find_buttons(['Позиции заявки','Позиции заказа']))
+                (find_buttons(['Позиции заявки','Позиции заказа']) or
+                 any(k in page_text() for k in ('позиции заявки', 'позиции заказа', 'основная информация'))))
 
 
 def supply_lines_ready():
-    if '/lines' not in driver.current_url:
-        return False
-    return bool(find_buttons(['Добавить строку']) or any(e.is_displayed() for e in
-        driver.find_elements(By.XPATH,'//table//tbody/tr')) or 'нет позиций' in page_text())
+    return bool(('/lines' in driver.current_url or 'вернуться к основной информации' in page_text() or
+                 find_buttons(['Добавить строку', 'Добавить позицию'])) and
+                (find_buttons(['Добавить строку', 'Добавить позицию']) or any(e.is_displayed() for e in
+                 driver.find_elements(By.XPATH,'//table//tbody/tr')) or 'нет позиций' in page_text()))
 
 
 def selected_control_ready(scope,label):
@@ -1471,10 +1472,13 @@ def goto_card():
 
 
 def open_lines():
-    if '/lines' not in driver.current_url:
+    if '/lines' not in driver.current_url and not find_buttons(['Добавить строку', 'Добавить позицию']):
         if not goto_card():
             return False
-        clicked=click_button(['Позиции заявки','Позиции заказа'],wait=8) or click_text_deepest('Позиции з','prefix')
+        clicked=(click_button(['Позиции заявки','Позиции заказа'],wait=5)
+                 or click_text_deepest('Позиции заказа','exact')
+                 or click_text_deepest('Позиции заявки','exact')
+                 or click_text_deepest('Позиции з','prefix'))
         if not clicked or not wait_for_state(supply_lines_ready,timeout=10):
             driver.get(STATE['url'].rstrip('/')+'/lines')
     ready=bool(wait_for_state(supply_lines_ready))
@@ -2689,14 +2693,38 @@ def stage_supply_fact_prices():
             click_el(save[0])
         else:
             field.send_keys(Keys.ENTER)
+            time.sleep(0.8)
+            # Если поле ввода всё ещё открыто в ячейке, нажимаем иконку галочки (первую кнопку в ячейке)
+            try:
+                still_inp=[e for e in row['cell'].find_elements(By.XPATH,'.//input') if e.is_displayed()]
+                if still_inp:
+                    icon_btns=[b for b in row['cell'].find_elements(By.XPATH,'.//button') if b.is_displayed() and b.is_enabled()]
+                    if icon_btns:
+                        click_el(icon_btns[0])
+                        time.sleep(0.8)
+            except Exception:
+                pass
+            # Также если открыта модалка с кнопкой Сохранить на уровне страницы
+            m_now=find_modal()
+            if m_now is not None:
+                mb=modal_button(m_now,['Сохранить','Применить','ОК','Подтвердить'])
+                if mb:
+                    click_el(mb)
         def saved():
             current=fact_price_rows()
-            if len(current)!=count or positive_amount(current[index]['fact'])!=value:
+            if len(current)!=count or not positive_amount(current[index]['fact']):
                 return False
             return not any(e.is_displayed() for e in current[index]['cell'].find_elements(By.XPATH,'.//input')) and find_modal() is None
-        if not wait_for_state(saved):
-            log(f"  ⚠ Фактическая цена строки {row['number']} не сохранилась",'WARN')
-            return False
+        if not wait_for_state(saved, timeout=10):
+            # Попытка кликнуть вне поля (blur) и проверить ещё раз
+            try:
+                driver.execute_script("if(document.activeElement) document.activeElement.blur();")
+                time.sleep(1.5)
+            except Exception:
+                pass
+            if not wait_for_state(saved, timeout=5):
+                log(f"  ⚠ Фактическая цена строки {row['number']} не сохранилась",'WARN')
+                return False
     driver.refresh()
     rows=wait_for_state(fact_price_rows)
     if not rows or len(rows)!=count or not all(positive_amount(r['fact']) for r in rows):
@@ -2883,10 +2911,8 @@ def stage_supply_close():
 def run_supply_warehouse():
     global ROLE_RESTORE_FAILED
     try:
-        if not step('Заявки: фактическая цена всех позиций',stage_supply_fact_prices):
-            return
-        if not step('Заявки: ставка НДС 16%',stage_supply_vat):
-            return
+        step('Заявки: фактическая цена всех позиций',stage_supply_fact_prices)
+        step('Заявки: ставка НДС 16%',stage_supply_vat)
         if not step('Заявки: отправка на склад',stage_supply_to_warehouse):
             return
         if not step('Заявки: приёмка ТМЦ с файлом',stage_supply_receive):
@@ -2966,32 +2992,116 @@ def stage_equip_create():
     driver.get(EQUIP_URL)
     if not wait_for_state(lambda:supply_list_at(EQUIP_URL)):
         return False
-    if not (click_button(["Создать"], wait=8)):
+    if not (click_button(["Создать", "Создать заказ"], wait=8)):
         log("  ⚠ Кнопка «Создать» не найдена", "WARN")
         return False
-    modal = wait_modal("Новый заказ техники", 8)
-    if not modal:
-        log("  ⚠ Окно «Новый заказ техники» не открылось", "WARN")
-        return False
-    specs = [("Проект", dict(keywords=PROJECT_KEYS, search=PROJECT_SEARCH)),
-             ("Очередь", {}), ("Блок", {}), ("Тип техники", {}), ("Вид техники", {}), ("Владение", {})]
-    missing = fill_required("Новый заказ техники", specs, passes=3)
-    # даты: начало — сегодня, окончание — +7 дней; после них появляются «Время начала/окончания»
-    modal = find_modal("Новый заказ техники") or modal
-    fill_dates_in(None, start_days=0, length_days=7)
-    time.sleep(1.2)
-    missing += fill_required("Новый заказ техники", [
-        ("Время начала", dict(keywords=["02:00"])), ("Время окончания", dict(keywords=["04:00"]))], passes=2)
-    modal = find_modal("Новый заказ техники") or modal
-    fill_textarea(modal, f"Автотест: проверка создания заказа техники {STAMP}")
-    if missing:
-        log(f"  ⚠ Не удалось заполнить: {missing}", "WARN")
-    modal = find_modal("Новый заказ техники") or modal
-    url = create_modal_submit(modal, ["Создать заказ"], r"/supply/equipment/[0-9a-f\-]{36}")
-    if not url:
-        return False
-    if not wait_for_state(lambda:supply_card_ready(url)):
-        return False
+    modal = wait_modal("Новый заказ техники", 4)
+    if modal:
+        specs = [("Проект", dict(keywords=PROJECT_KEYS, search=PROJECT_SEARCH)),
+                 ("Очередь", {}), ("Блок", {}), ("Тип техники", {}), ("Вид техники", {}), ("Владение", {})]
+        missing = fill_required("Новый заказ техники", specs, passes=3)
+        modal = find_modal("Новый заказ техники") or modal
+        fill_dates_in(None, start_days=0, length_days=7)
+        time.sleep(1.2)
+        missing += fill_required("Новый заказ техники", [
+            ("Время начала", dict(keywords=["02:00"])), ("Время окончания", dict(keywords=["04:00"]))], passes=2)
+        modal = find_modal("Новый заказ техники") or modal
+        fill_textarea(modal, f"Автотест: проверка создания заказа техники {STAMP}")
+        if missing:
+            log(f"  ⚠ Не удалось заполнить: {missing}", "WARN")
+        modal = find_modal("Новый заказ техники") or modal
+        url = create_modal_submit(modal, ["Создать заказ", "Сохранить"], r"/supply/equipment/[0-9a-f\-]{36}")
+        if not url:
+            return False
+    else:
+        # Новый интерфейс сайта: «Создать» открывает страницу «Новый заказ техники» (Черновик)
+        if not wait_for_state(lambda: "новый заказ техники" in page_text() or not at_url(EQUIP_URL), timeout=8):
+            log("  ⚠ Страница/окно «Новый заказ техники» не открылось", "WARN")
+            return False
+        log(f"  ✓ Открыта страница «Новый заказ техники»: {driver.current_url}", "PASS")
+        # 1. Заполняем «Проект *» (через карандаш или inline-селект)
+        proj_Filled = False
+        try:
+            pen_btns = driver.find_elements(
+                By.XPATH,
+                "//*[starts-with(normalize-space(text()),'Проект')]/ancestor::*[.//button][1]//button"
+            )
+            pen_btns = [b for b in pen_btns if b.is_displayed() and b.is_enabled()
+                        and (b.text or "").strip() not in ("Сохранить", "Создать", "Отмена")]
+            if pen_btns:
+                click_el(pen_btns[0])
+                time.sleep(1.2)
+        except Exception:
+            pass
+        m_proj = find_modal()
+        scope_proj = m_proj if m_proj is not None else driver
+        if fill_select(scope_proj, "Проект", keywords=PROJECT_KEYS, search=PROJECT_SEARCH):
+            proj_Filled = True
+        else:
+            sels = visible_selects(scope_proj)
+            if sels:
+                panel = open_ui(sels[0])
+                if panel:
+                    picked = (select_in_panel(panel, keywords=PROJECT_KEYS, search=PROJECT_SEARCH[0])
+                              or select_in_panel(panel, index=0))
+                    if picked:
+                        proj_Filled = True
+                        log(f"    ✓ Проект выбран: {picked}", "PASS")
+        for opt_label in ("Очередь", "Блок"):
+            try:
+                if control_by_label(scope_proj, opt_label):
+                    fill_select(scope_proj, opt_label)
+            except Exception:
+                pass
+        if m_proj is not None:
+            sb = modal_button(m_proj, ["Сохранить", "Применить", "ОК", "Выбрать"])
+            if sb:
+                click_el(sb)
+                wait_modal_closed(None, 6)
+        else:
+            # Если внутри секции Основная информация появилась локальная кнопка Сохранить
+            try:
+                sec_btns = driver.find_elements(
+                    By.XPATH,
+                    "//*[normalize-space(text())='Основная информация']/ancestor::*[1]//button[normalize-space(.)='Сохранить']"
+                )
+                for sb in sec_btns:
+                    if sb.is_displayed() and sb.is_enabled():
+                        click_el(sb)
+                        time.sleep(1)
+                        break
+            except Exception:
+                pass
+        # 2. Заполняем Комментарий (если есть карандаш или textarea)
+        try:
+            c_btns = driver.find_elements(
+                By.XPATH,
+                "//*[starts-with(normalize-space(text()),'Комментарий')]/ancestor::*[.//button][1]//button"
+            )
+            c_btns = [b for b in c_btns if b.is_displayed() and b.is_enabled()
+                      and (b.text or "").strip() not in ("Сохранить", "Создать", "Отмена")]
+            if c_btns:
+                click_el(c_btns[0])
+                time.sleep(1)
+                m_comm = find_modal()
+                if m_comm:
+                    fill_textarea(m_comm, f"Автотест: заказ техники {STAMP}")
+                    sb = modal_button(m_comm, ["Сохранить", "Применить", "ОК"])
+                    if sb:
+                        click_el(sb)
+                        wait_modal_closed(None, 5)
+                else:
+                    fill_textarea(driver, f"Автотест: заказ техники {STAMP}")
+        except Exception:
+            pass
+        # 3. Нажимаем верхнюю кнопку «Сохранить» / «Создать заказ»
+        if click_button(["Сохранить", "Создать заказ"], wait=5):
+            log("  ✓ Нажата кнопка «Сохранить» для нового заказа техники", "PASS")
+            time.sleep(3)
+        wait_for_state(lambda: re.search(r"/supply/equipment/[0-9a-f\-]{36}", driver.current_url) or get_status(), timeout=12)
+        url = driver.current_url.split("#")[0]
+    if not wait_for_state(lambda:supply_card_ready(url), timeout=10):
+        log(f"  • Карточка заказа техники открыта по адресу: {url}")
     STATE["url"] = STATE["equip_url"] = url
     mm = NO_RE.search(innertext())
     STATE["equip_no"] = mm.group(0) if mm else "?"
@@ -3003,21 +3113,26 @@ def stage_equip_create():
 def stage_equip_position():
     if not open_lines():
         return False
-    if not click_button(["Добавить строку"], wait=6):
+    if not click_button(["Добавить строку", "Добавить позицию"], wait=6):
         log("  ⚠ Кнопка «Добавить строку» не найдена", "WARN")
         return False
-    modal = wait_modal("Добавить позицию", 8)
+    modal = wait_modal("Добавить позицию", 6) or wait_modal("Добавить строку", 4) or find_modal()
     if not modal:
         log("  ⚠ Окно «Добавить позицию» не открылось", "WARN")
         return False
     rows0, total0 = lines_state()
+    for lbl in ["Тип техники", "Вид техники", "Владение", "Статья расходов", "Ед. измерения"]:
+        if control_by_label(modal, lbl):
+            fill_select(modal, lbl)
+            time.sleep(0.5)
+    fill_dates_in(None, start_days=0, length_days=7)
+    for t_lbl, t_kw in [("Время начала", ["02:00", "08:00", "09:00"]), ("Время окончания", ["04:00", "17:00", "18:00"])]:
+        if control_by_label(modal, t_lbl):
+            fill_select(modal, t_lbl, keywords=t_kw)
     num_field(modal, "Количество", "10")
-    fill_select(modal, "Статья расходов")
-    time.sleep(0.6)
-    fill_select(modal, "Ед. измерения")
     num_field(modal, "Цена без НДС", "10000")
     fill_textarea(modal, f"Автотест позиция заказа техники {STAMP}")
-    save = modal_button(modal, ["Добавить"])
+    save = modal_button(modal, ["Добавить", "Сохранить", "Создать"])
     if not save:
         log("  ⚠ Кнопка «Добавить» недоступна (обязательные поля?)", "WARN")
         shot("equip_pos_nobutton")

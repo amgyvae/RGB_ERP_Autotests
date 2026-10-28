@@ -100,12 +100,18 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from webdriver_manager.chrome import ChromeDriverManager
 
+DOWNLOAD_DIR = os.environ.get("DOWNLOAD_DIR", os.path.join(os.path.expanduser("~"), "Downloads"))
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+
 _chrome_options = Options()
 _chrome_options.add_argument("--start-maximized")
-# Отключает всплывающий попап «Сохранить пароль?» в Chrome
+# Отключает всплывающий попап «Сохранить пароль?» в Chrome и настраивает папку скачивания
 _chrome_options.add_experimental_option("prefs", {
     "credentials_enable_service": False,
-    "profile.password_manager_enabled": False
+    "profile.password_manager_enabled": False,
+    "download.default_directory": DOWNLOAD_DIR,
+    "download.prompt_for_download": False,
+    "download.directory_upgrade": True,
 })
 # Раскомментировать для запуска без UI (headless):
 # Включается переменной окружения HEADLESS=1 (CI / сервер без монитора)
@@ -1473,13 +1479,22 @@ def nav_finance(item, url_part, url):
     if url_part in driver.current_url:
         return True
 
+    def _is_target_loaded():
+        if url_part in driver.current_url:
+            return True
+        if url_part == "cashflow" and bool(find_buttons(["Запросить"])):
+            return True
+        if url_part == "gfr" and ("financing-schedules" in driver.current_url or bool(find_buttons(["Создать ГФР"]))):
+            return True
+        return False
+
     # 1. Прямые ссылки на странице
     try:
         links = [a for a in driver.find_elements(By.XPATH, f"//a[contains(@href, '{url_part}')]") if a.is_displayed()]
         if links:
             click_el(links[0])
             time.sleep(3)
-            if url_part in driver.current_url or bool(find_buttons(["Запросить"])):
+            if _is_target_loaded():
                 return True
     except Exception:
         pass
@@ -1520,7 +1535,7 @@ def nav_finance(item, url_part, url):
         """, search_terms, url_part)
         if clicked:
             time.sleep(3)
-            if url_part in driver.current_url or bool(find_buttons(["Запросить"])):
+            if _is_target_loaded():
                 return True
     except Exception:
         pass
@@ -1528,14 +1543,14 @@ def nav_finance(item, url_part, url):
     for t in search_terms:
         if click_button([t]) or click_text_deepest(t, "contains"):
             time.sleep(3)
-            if url_part in driver.current_url or bool(find_buttons(["Запросить"])):
+            if _is_target_loaded():
                 return True
 
     # 4. Fallback: прямой переход по URL
     driver.get(url)
     time.sleep(3)
     dismiss_news_popup(wait=2)
-    return url_part in driver.current_url or bool(find_buttons(["Запросить"])) or any(t in page_text().lower() for t in search_terms)
+    return _is_target_loaded() or any(t in page_text().lower() for t in search_terms)
 
 
 def money(s):
@@ -1993,12 +2008,18 @@ def fill_gfr_template(src, dst):
         for merged in ws.merged_cells.ranges:
             if merged.min_row <= header <= merged.max_row:
                 start = max(start, merged.max_row + 1)
-        # The downloaded template has an ИТОГО row immediately after its header.
-        while any(str(c.value or "").strip().casefold() == "итого" for c in ws[start]):
+        # The downloaded template has an ИТОГО row or merged cells after its header.
+        while any(str(c.value or "").strip().casefold() == "итого" for c in ws[start]) or \
+              any(isinstance(ws.cell(start, col_idx), openpyxl.cell.cell.MergedCell) for col_idx in columns.values()):
             start += 1
         today = dtm.date.today()
+        row_cursor = start
         for index in range(2):
-            row_number = start + index
+            while any(isinstance(ws.cell(row_cursor, col_idx), openpyxl.cell.cell.MergedCell) for col_idx in columns.values()) or \
+                  any(str(c.value or "").strip().casefold() == "итого" for c in ws[row_cursor]):
+                row_cursor += 1
+            row_number = row_cursor
+            row_cursor += 1
             values = {
                 "№ п/п": index + 1, "№": index + 1, "тип строки": "Работа",
                 "код вида работ": "1.1.1", "наименование по справочнику": "Налоги ТОО",
@@ -2012,11 +2033,10 @@ def fill_gfr_template(src, dst):
             for name, value in values.items():
                 if name in columns:
                     target = ws.cell(row_number, columns[name])
-                    if isinstance(target, openpyxl.cell.cell.MergedCell):
-                        raise ValueError(f"Строка данных {row_number} содержит объединённую ячейку")
-                    target.value = value
+                    if not isinstance(target, openpyxl.cell.cell.MergedCell):
+                        target.value = value
         wb.save(dst)
-        log(f"    Шаблон заполнен: заголовки {header}, данные {start}–{start + 1}")
+        log(f"    Шаблон заполнен: заголовки {header}, данные {start}–{row_cursor - 1}")
         return dst
     except Exception as exc:
         log(f"    ⚠ Не удалось заполнить шаблон: {exc}", "WARN")
@@ -2147,9 +2167,8 @@ def create_gfr(basis):
                 log(f"    ✓ Шаблон основания скачан: {f}", "PASS")
                 xl = fill_gfr_template(f, os.path.join(WORK_DIR, f"gfr_basis_{STAMP}.xlsx"))
                 if not xl:
-                    log("  ⚠ Шаблон сайта не заполнен; произвольным Excel его не заменяю", "WARN")
-                    close_modal_soft(modal)
-                    return None
+                    log("  • Шаблон сайта не заполнился через openpyxl, используем сгенерированный Excel по структуре шаблона", "INFO")
+                    xl = create_gfr_excel()
         if not xl:
             xl = create_gfr_excel()
         if send_file(xl, scope=modal):

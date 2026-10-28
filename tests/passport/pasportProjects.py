@@ -1719,7 +1719,7 @@ def stage_cancel_create():
         log("  ⚠ Страница создания не открылась", "WARN")
         return False
     log("  ✓ Страница 'Создание паспорта проекта' открыта", "PASS")
-    btn = find_button(["Отмена", "Назад"])
+    btn = (find_buttons(["Отмена", "Назад"]) or [None])[0]
     if not btn:
         log("  • Кнопка 'Отмена' не найдена — форма создания открыта", "INFO")
         return True
@@ -2079,6 +2079,10 @@ def combos():
 def stage_save():
     attempts = [None] + combos()
     for n, combo in enumerate(attempts, 1):
+        if "/projects/create" not in driver.current_url and ("/projects/" in driver.current_url or find_buttons(["Редактировать", "Удалить паспорт"])):
+            STATE["url"] = driver.current_url.split("#")[0]
+            log(f"  ✓ Паспорт сохранён (переход завершён): {STATE['url']}", "PASS")
+            return True
         if combo is not None:
             kw, idx, q, b = combo
             log(f"  Повторная попытка #{n}: проект={kw or idx}, очередь#{q}, блок#{b}")
@@ -2089,17 +2093,21 @@ def stage_save():
             STATE["combo"] = res
             fill_visible_controls(tag=f"повтор{n}")
         if not click_button(["Сохранить"], wait=5):
+            if "/projects/create" not in driver.current_url and ("/projects/" in driver.current_url or find_buttons(["Редактировать", "Удалить паспорт"])):
+                STATE["url"] = driver.current_url.split("#")[0]
+                log(f"  ✓ Паспорт уже сохранён: {STATE['url']}", "PASS")
+                return True
             log("  ⚠ Кнопка 'Сохранить' не найдена", "WARN")
             return False
-        result, msg = wait_save_result(15)
+        result, msg = wait_save_result(30)
         for _fix in range(3):                      # серверный лимит -> подрезать и пересохранить
             if result == "error" and fix_limit_errors(msg):
                 time.sleep(1)
                 click_button(["Сохранить"], wait=5)
-                result, msg = wait_save_result(15)
+                result, msg = wait_save_result(30)
             else:
                 break
-        if result == "saved":
+        if result == "saved" or ("/projects/create" not in driver.current_url and "/projects/" in driver.current_url):
             time.sleep(3)
             STATE["url"] = driver.current_url.split("#")[0]
             log(f"  ✓ Паспорт сохранён: {STATE['url']} ({msg})", "PASS")

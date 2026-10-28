@@ -1821,25 +1821,31 @@ def add_approver():
         return True
     trg = approver_trigger()
     if trg is None:
-        # Нажимаем круглую синюю кнопку '+👤' / 'Этапы согласования не настроены'
-        clicked = False
-        for xp in [
-            "//*[contains(normalize-space(.),'Этапы согласования')]",
-            "//*[contains(normalize-space(text()),'Маршрут согласования')]/following::button[1]",
-            "//*[contains(normalize-space(text()),'Маршрут согласования')]/following::*[self::button or self::div][1]",
-            "//button[contains(.,'Добавить этап') or contains(.,'Этап')]"
-        ]:
-            try:
-                for b in driver.find_elements(By.XPATH, xp):
-                    if b.is_displayed():
-                        click_el(b)
-                        clicked = True
-                        time.sleep(1.5)
-                        break
-            except Exception:
-                pass
-            if clicked:
-                break
+        # Нажимаем кнопку 'Добавить этап' в блоке 'Маршрут согласования'
+        clicked = (click_button(["Добавить этап"], wait=5)
+                   or click_text_deepest("Добавить этап", "exact")
+                   or click_text_deepest("Добавить этап", "contains")
+                   or click_button(["+ Этап", "Этап"], wait=2))
+        if not clicked:
+            for xp in [
+                "//button[contains(normalize-space(.),'Добавить этап')]",
+                "//*[normalize-space(text())='Добавить этап']",
+                "//*[contains(normalize-space(text()),'Этапы согласования не настроены')]//button",
+                "//*[contains(normalize-space(text()),'Маршрут согласования')]/following::button[1]",
+            ]:
+                try:
+                    for b in driver.find_elements(By.XPATH, xp):
+                        if b.is_displayed():
+                            click_el(b)
+                            clicked = True
+                            time.sleep(1.5)
+                            break
+                except Exception:
+                    pass
+                if clicked:
+                    break
+        else:
+            time.sleep(1.5)
 
         for _ in range(16):
             trg = approver_trigger()
@@ -1859,8 +1865,11 @@ def add_approver():
         except Exception:
             pass
     if trg is None:
-        log("  • Селект 'Выбрать согласующего' не найден (возможно, маршрут фиксирован)", "INFO")
-        return True
+        if route_has_approver():
+            log("  ✓ Согласующий уже назначен в маршруте", "PASS")
+            return True
+        log("  ⚠ Селект 'Выбрать согласующего' не найден", "WARN")
+        return False
 
     panel = open_ui(trg)
     if not panel:
@@ -2378,18 +2387,33 @@ def stage_send_for_approval():
     if before and any(w in before.lower() for w in ("согласован", "утвержд", "на согласовании")):
         log(f"  ✓ Смета уже отправлена: {before}", "PASS")
         return True
+    if not route_has_approver():
+        log("  • Маршрут согласования пуст перед отправкой — добавляем согласующего")
+        add_approver()
+        goto_card()
     label = click_action(TO_SEND)
     if not label:
         if click_text_deepest("Отправить на согласование", "contains"):
             time.sleep(3)
-            return True
-        log("  ⚠ Кнопка 'Отправить на согласование' не найдена/недоступна", "WARN")
-        return False
+            label = "Отправить на согласование"
+        else:
+            log("  ⚠ Кнопка 'Отправить на согласование' не найдена/недоступна", "WARN")
+            return False
     time.sleep(4)
     driver.refresh()
     if not wait_for_state(smeta_card_ready):
         return False
     after = get_status()
+    if after and "черновик" in after.lower():
+        log("  • Статус остался 'Черновик' — проверяем маршрут и повторяем отправку")
+        add_approver()
+        add_approver_final()
+        goto_card()
+        click_action(TO_SEND) or click_text_deepest("Отправить на согласование", "contains")
+        time.sleep(4)
+        driver.refresh()
+        wait_for_state(smeta_card_ready)
+        after = get_status()
     log(f"  Статус после: {after}", "PASS")
     return True
 

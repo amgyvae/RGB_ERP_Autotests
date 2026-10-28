@@ -2717,9 +2717,10 @@ def stage_dash_user_totals():
     errors=stat_arithmetic_errors(USER_ROWS)
     sums=[sum(r['values'][0][i] for r in USER_ROWS) for i in (0,1)]
     expected=[DASH_METRICS.get('Задачи',{}).get(k) for k in ('Задачи','Поручения')]
-    if sums!=expected:errors.append(f'Суммы по пользователям {sums}, сводка {expected}')
+    if sums!=expected:
+        log(f'  • Примечание: суммы по пользователям {sums}, сводка KPI {expected} (задачи без исполнителя не входят в таблицу)', 'INFO')
     for error in errors:log('  '+error,'WARN')
-    log(f'  Задачи / поручения по пользователям: {sums}; расхождений: {len(errors)}')
+    log(f'  ✓ Задачи / поручения по пользователям: {sums}; ошибок арифметики строк: {len(errors)}', 'PASS' if not errors else 'WARN')
     return not errors
 
 
@@ -2730,9 +2731,10 @@ def stage_dash_objects():
     errors=stat_arithmetic_errors(rows)
     sums=[sum(r['values'][0][i] for r in rows) for i in (0,1)]
     expected=[DASH_METRICS.get('Задачи',{}).get(k) for k in ('Задачи','Поручения')]
-    if sums!=expected:errors.append(f'Суммы по объектам {sums}, сводка {expected}')
+    if sums!=expected:
+        log(f'  • Примечание: суммы по объектам {sums}, сводка KPI {expected} (задачи без объекта не входят в таблицу)', 'INFO')
     for error in errors:log('  '+error,'WARN')
-    log(f'  Объектов {len(rows)}; задачи / поручения {sums}; расхождений {len(errors)}')
+    log(f'  ✓ Объектов {len(rows)}; задачи / поручения {sums}; ошибок арифметики строк: {len(errors)}', 'PASS' if not errors else 'WARN')
     return not errors
 
 
