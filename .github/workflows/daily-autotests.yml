@@ -38,28 +38,41 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
+      modules: ${{ steps.matrix.outputs.modules }}
+      web_only: ${{ steps.matrix.outputs.web_only }}
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
 
-      - name: Список модулей
+      - name: Установка зависимостей для уведомлений
+        run: python -m pip install requests gspread google-auth openpyxl
+
+      - name: Список модулей и уведомление о старте в Telegram
         id: matrix
         env:
           MODULES: ${{ inputs.modules || vars.AUTOTEST_MODULES || 'all' }}
           # На облачном Ubuntu нет NCALayer — такие модули пропускаются,
           # если не выбран self-hosted раннер или ncalayer=include.
           WEB_ONLY: ${{ (vars.AUTOTEST_RUNNER || 'ubuntu-latest') == 'ubuntu-latest' && inputs.ncalayer != 'include' }}
+          TG_ENABLED: ${{ vars.TG_ENABLED || '1' }}
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          TG_CHATS: ${{ secrets.TG_CHATS }}
+          RGB_ACCOUNT1_LOGIN: jyktmargyplay2@gmail.com
         run: |
           FLAGS=""
           if [ "$WEB_ONLY" = "true" ]; then FLAGS="--web-only"; fi
           MATRIX=$(python run_all.py --matrix "$MODULES" $FLAGS)
           echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+          echo "modules=$MODULES" >> "$GITHUB_OUTPUT"
+          echo "web_only=$WEB_ONLY" >> "$GITHUB_OUTPUT"
           echo "### План прогона" >> "$GITHUB_STEP_SUMMARY"
           echo "Модули: \`$MODULES\` · только web: \`$WEB_ONLY\`" >> "$GITHUB_STEP_SUMMARY"
           echo "$MATRIX"
+          python run_all.py --notify-start "$MODULES" $FLAGS
 
   test:
     name: ${{ matrix.title }}
@@ -117,3 +130,39 @@ jobs:
             contacts_diagnostics/
           retention-days: 14
           if-no-files-found: ignore
+
+  summary:
+    name: Итоговый отчёт в Telegram
+    needs: [plan, test]
+    if: always()
+    runs-on: ubuntu-latest
+    env:
+      TG_ENABLED: ${{ vars.TG_ENABLED || '1' }}
+      TG_TOKEN: ${{ secrets.TG_TOKEN }}
+      TG_CHATS: ${{ secrets.TG_CHATS }}
+      MODULES: ${{ needs.plan.outputs.modules || 'all' }}
+      WEB_ONLY: ${{ needs.plan.outputs.web_only || 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Установка зависимостей
+        run: python -m pip install requests gspread google-auth openpyxl
+
+      - name: Скачивание результатов всех модулей
+        uses: actions/download-artifact@v4
+        with:
+          pattern: report-*-${{ github.run_number }}
+          path: logs/collected_artifacts
+          merge-multiple: false
+        continue-on-error: true
+
+      - name: Отправка полного итога автотеста в Telegram
+        run: |
+          FLAGS=""
+          if [ "$WEB_ONLY" = "true" ]; then FLAGS="--web-only"; fi
+          python run_all.py --notify-summary "$MODULES" $FLAGS

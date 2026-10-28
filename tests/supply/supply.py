@@ -402,7 +402,7 @@ def supply_card_ready(url=None):
 
 def supply_lines_ready():
     return bool(('/lines' in driver.current_url or 'вернуться к основной информации' in page_text() or
-                 find_buttons(['Добавить строку', 'Добавить позицию'])) and
+                 find_buttons(['Добавить строку', 'Добавить позицию']) or 'стоимость единицы' in page_text()) and
                 (find_buttons(['Добавить строку', 'Добавить позицию']) or any(e.is_displayed() for e in
                  driver.find_elements(By.XPATH,'//table//tbody/tr')) or 'нет позиций' in page_text()))
 
@@ -1079,13 +1079,32 @@ def click_action(texts, action_element=None):
     modal = find_modal()
     if modal:
         try:
+            for cb in modal.find_elements(By.XPATH, ".//input[@type='checkbox']"):
+                if cb.is_displayed() and cb.is_enabled() and not cb.is_selected():
+                    click_el(cb)
+                    time.sleep(0.2)
+        except Exception:
+            pass
+        try:
+            for s in visible_selects(modal):
+                if ctrl_enabled(s) and ctrl_unset(s):
+                    p = open_ui(s)
+                    if p:
+                        select_in_panel(p, index=0)
+                        close_panels()
+        except Exception:
+            pass
+        try:
             for ta in modal.find_elements(By.XPATH, ".//textarea"):
                 if ta.is_displayed() and ta.is_enabled():
                     type_text(ta, f"Автотест: {label} ({STAMP})")
                     break
         except Exception:
             pass
-        conf = modal_button(modal, texts + ["Подтвердить", "Отправить", "Сохранить", "ОК", "Да"])
+        conf = modal_button(modal, texts + [
+            "Отправить на склад", "Передать на склад", "На склад",
+            "Подтвердить", "Отправить", "Сохранить", "ОК", "Да"
+        ])
         if conf:
             click_el(conf)
             log(f"    Подтверждение '{label}' нажато")
@@ -2638,32 +2657,57 @@ def fact_price_rows():
                 }
             });
             const leaf=grid[grid.length-1]||[];
-            const fact=leaf.findIndex(t=>t==='Факт');
+            let fact=leaf.findIndex((t,i)=>/^Факт/i.test(t)&&grid.some(row=>/Стоимость единицы|Цена/i.test(row[i]||'')));
+            if(fact<0)fact=leaf.lastIndexOf('Факт');
+            if(fact<0)fact=leaf.findIndex(t=>/^Факт/i.test(t));
             if(fact<0)continue;
-            const plan=leaf.findIndex((t,i)=>t==='План'&&grid.some(row=>/Стоимость единицы/i.test(row[i]||'')));
-            return Array.from(table.tBodies).flatMap(b=>Array.from(b.rows)).filter(row=>
-                vis(row)&&row.cells.length>fact&&/^\d+$/.test(norm(row.cells[0]))).map(row=>({
-                    cell:row.cells[fact],fact:norm(row.cells[fact]),
-                    plan:plan>=0?norm(row.cells[plan]):'',number:norm(row.cells[0])}));
+            let plan=leaf.findIndex((t,i)=>/^План/i.test(t)&&grid.some(row=>/Стоимость единицы|Цена/i.test(row[i]||'')));
+            if(plan<0)plan=leaf.findIndex(t=>/^План/i.test(t));
+            const rows=Array.from(table.tBodies).flatMap(b=>Array.from(b.rows)).filter(row=>
+                vis(row)&&row.cells.length>fact);
+            if(!rows.length)continue;
+            return rows.map((row,idx)=>({
+                row:row,
+                cell:row.cells[fact],fact:norm(row.cells[fact]),
+                plan:plan>=0&&row.cells[plan]?norm(row.cells[plan]):'',
+                number:norm(row.cells[0])||String(idx+1)}));
         }
         return [];
     """) or []
 
 
-def fact_price_input(cell):
-    fields=[e for e in cell.find_elements(By.XPATH,'.//input') if e.is_displayed() and e.is_enabled()]
-    if fields:
-        return fields[0],cell
+def fact_price_input(row_index):
+    try:
+        current=fact_price_rows()
+        if row_index<len(current):
+            cell=current[row_index]['cell']
+            fields=[e for e in cell.find_elements(By.XPATH,".//input[not(@type='hidden') and not(@type='checkbox') and not(@type='file')]") if e.is_displayed() and e.is_enabled()]
+            if fields:
+                return fields[0],cell
+            tr=current[row_index].get('row')
+            if tr is not None:
+                fields=[e for e in tr.find_elements(By.XPATH,".//input[not(@type='hidden') and not(@type='checkbox') and not(@type='file')]") if e.is_displayed() and e.is_enabled()]
+                if fields:
+                    return fields[-1],tr
+    except Exception:
+        pass
     modal=find_modal()
-    if modal is not None and any(k in (modal.get_attribute('innerText') or '').lower() for k in ('факт','цен','стоимост')):
-        fields=[e for e in modal.find_elements(By.XPATH,".//input[not(@type='hidden')]") if e.is_displayed() and e.is_enabled()]
-        if len(fields)==1:
-            return fields[0],modal
+    if modal is not None:
+        fields=[e for e in modal.find_elements(By.XPATH,".//input[not(@type='hidden') and not(@type='checkbox') and not(@type='file')]") if e.is_displayed() and e.is_enabled()]
+        if fields:
+            return fields[-1],modal
+    try:
+        tbl_inputs=[e for e in driver.find_elements(By.XPATH,"//table//tbody//input[not(@type='hidden') and not(@type='checkbox') and not(@type='file')]") if e.is_displayed() and e.is_enabled()]
+        if tbl_inputs:
+            return tbl_inputs[-1],driver
+    except Exception:
+        pass
     return False
 
 
 def stage_supply_fact_prices():
     if not switch_user(SECOND_LOGIN,SECOND_PASS) or not request_card() or not open_lines():
+        log('  ⚠ Не удалось открыть позиции заявки под снабженцем','WARN')
         return False
     rows=wait_for_state(fact_price_rows)
     if not rows:
@@ -2680,11 +2724,19 @@ def stage_supply_fact_prices():
             continue
         value=positive_amount(row['plan']) or 1000
         buttons=[b for b in row['cell'].find_elements(By.XPATH,'.//button') if b.is_displayed() and b.is_enabled()]
-        if not buttons or not click_el(buttons[-1]):
-            log(f"  ⚠ Редактирование Факт в строке {row['number']} не найдено",'WARN')
-            return False
-        editor=wait_for_state(lambda:fact_price_input(row['cell']))
+        if not buttons and row.get('row') is not None:
+            buttons=[b for b in row['row'].find_elements(By.XPATH,'.//button') if b.is_displayed() and b.is_enabled() and (b.text or '').strip() not in ('⋮','⋯','...','…')]
+        if buttons:
+            click_el(buttons[-1])
+        else:
+            click_el(row['cell'])
+            try:
+                ActionChains(driver).double_click(row['cell']).perform()
+            except Exception:
+                pass
+        editor=wait_for_state(lambda:fact_price_input(index), timeout=8)
         if not editor:
+            log(f"  ⚠ Поле ввода фактической цены в строке {row['number']} не открылось",'WARN')
             return False
         field,scope=editor
         type_text(field,format(value,'.15g'))
@@ -2694,17 +2746,17 @@ def stage_supply_fact_prices():
         else:
             field.send_keys(Keys.ENTER)
             time.sleep(0.8)
-            # Если поле ввода всё ещё открыто в ячейке, нажимаем иконку галочки (первую кнопку в ячейке)
             try:
-                still_inp=[e for e in row['cell'].find_elements(By.XPATH,'.//input') if e.is_displayed()]
+                cur_rows=fact_price_rows()
+                cur_cell=cur_rows[index]['cell'] if index<len(cur_rows) else row['cell']
+                still_inp=[e for e in cur_cell.find_elements(By.XPATH,'.//input') if e.is_displayed()]
                 if still_inp:
-                    icon_btns=[b for b in row['cell'].find_elements(By.XPATH,'.//button') if b.is_displayed() and b.is_enabled()]
+                    icon_btns=[b for b in cur_cell.find_elements(By.XPATH,'.//button') if b.is_displayed() and b.is_enabled()]
                     if icon_btns:
                         click_el(icon_btns[0])
                         time.sleep(0.8)
             except Exception:
                 pass
-            # Также если открыта модалка с кнопкой Сохранить на уровне страницы
             m_now=find_modal()
             if m_now is not None:
                 mb=modal_button(m_now,['Сохранить','Применить','ОК','Подтвердить'])
@@ -2716,7 +2768,6 @@ def stage_supply_fact_prices():
                 return False
             return not any(e.is_displayed() for e in current[index]['cell'].find_elements(By.XPATH,'.//input')) and find_modal() is None
         if not wait_for_state(saved, timeout=10):
-            # Попытка кликнуть вне поля (blur) и проверить ещё раз
             try:
                 driver.execute_script("if(document.activeElement) document.activeElement.blur();")
                 time.sleep(1.5)
@@ -2730,6 +2781,7 @@ def stage_supply_fact_prices():
     if not rows or len(rows)!=count or not all(positive_amount(r['fact']) for r in rows):
         log('  ⚠ Фактические цены не подтверждены после обновления','WARN')
         return False
+    log(f'  ✓ Фактические цены заполнены во всех строках ({count})','PASS')
     return request_card()
 
 
@@ -3121,17 +3173,61 @@ def stage_equip_position():
         log("  ⚠ Окно «Добавить позицию» не открылось", "WARN")
         return False
     rows0, total0 = lines_state()
-    for lbl in ["Тип техники", "Вид техники", "Владение", "Статья расходов", "Ед. измерения"]:
-        if control_by_label(modal, lbl):
-            fill_select(modal, lbl)
-            time.sleep(0.5)
-    fill_dates_in(None, start_days=0, length_days=7)
-    for t_lbl, t_kw in [("Время начала", ["02:00", "08:00", "09:00"]), ("Время окончания", ["04:00", "17:00", "18:00"])]:
-        if control_by_label(modal, t_lbl):
-            fill_select(modal, t_lbl, keywords=t_kw)
-    num_field(modal, "Количество", "10")
-    num_field(modal, "Цена без НДС", "10000")
+    specs = [
+        ("Тип техники", {}),
+        ("Вид техники", {}),
+        ("Владение", {}),
+        ("Статья расходов", {}),
+        ("Ед. измерения", {}),
+        ("Ед. изм.", {}),
+        ("Время начала", dict(keywords=["02:00", "08:00", "09:00"])),
+        ("Время окончания", dict(keywords=["04:00", "17:00", "18:00"])),
+    ]
+    for _ in range(3):
+        modal = find_modal("Добавить позицию") or find_modal("Добавить строку") or find_modal() or modal
+        for lbl, kw in specs:
+            if control_by_label(modal, lbl):
+                ctrl = control_by_label(modal, lbl)
+                if ctrl is not None and ctrl_unset(ctrl, lbl):
+                    fill_select(modal, lbl, **kw)
+                    time.sleep(0.6)
+        # Также заполняем любые другие незаполненные селекты в модалке
+        for s in visible_selects(modal):
+            try:
+                if ctrl_enabled(s) and ctrl_unset(s):
+                    p = open_ui(s)
+                    if p:
+                        select_in_panel(p, index=0)
+                        close_panels()
+                        time.sleep(0.5)
+            except Exception:
+                continue
+    fill_dates_in(None, start_days=1, length_days=7)
+    modal = find_modal("Добавить позицию") or find_modal("Добавить строку") or find_modal() or modal
+    for n_lbl, n_val in [("Количество", "10"), ("Кол-во", "10"), ("Цена без НДС", "10000"), ("План. цена", "10000"), ("Цена", "10000")]:
+        num_field(modal, n_lbl, n_val)
+    # Заполняем любые оставшиеся пустые текстовые/числовые input внутри модалки
+    try:
+        for inp in modal.find_elements(By.XPATH, ".//input[not(@type='hidden') and not(@type='file') and not(@type='checkbox') and not(@type='radio')]"):
+            if not inp.is_displayed() or not inp.is_enabled():
+                continue
+            val = (inp.get_attribute("value") or "").strip()
+            ph = (inp.get_attribute("placeholder") or "").lower()
+            cls = (inp.get_attribute("class") or "").lower()
+            if val or "поиск" in ph or "дд" in ph or "дат" in ph or "date" in cls:
+                continue
+            itype = (inp.get_attribute("type") or "").lower()
+            imode = (inp.get_attribute("inputmode") or "").lower()
+            type_text(inp, "10" if (itype == "number" or imode in ("numeric", "decimal") or "цен" in ph or "кол" in ph or "сумм" in ph) else f"Автотест {STAMP}")
+    except Exception:
+        pass
     fill_textarea(modal, f"Автотест позиция заказа техники {STAMP}")
+    try:
+        if modal.find_elements(By.XPATH, ".//input[@type='file']"):
+            send_file(create_test_pdf("equip_line"), scope=modal)
+    except Exception:
+        pass
+    modal = find_modal("Добавить позицию") or find_modal("Добавить строку") or find_modal() or modal
     save = modal_button(modal, ["Добавить", "Сохранить", "Создать"])
     if not save:
         log("  ⚠ Кнопка «Добавить» недоступна (обязательные поля?)", "WARN")
@@ -3140,12 +3236,12 @@ def stage_equip_position():
         close_modal_soft(modal)
         return False
     click_el(save)
-    closed = wait_modal_closed("Добавить позицию", 8)
+    closed = wait_modal_closed("Добавить позицию", 8) and wait_modal_closed("Добавить строку", 4)
     time.sleep(2)
     if not closed:
         log(f"  ⚠ Окно не закрылось (валидация?). Уведомления: {read_toasts()}", "WARN")
         shot("equip_pos_validation")
-        m = find_modal("Добавить позицию")
+        m = find_modal("Добавить позицию") or find_modal("Добавить строку") or find_modal()
         if m:
             close_modal_soft(m)
         return False

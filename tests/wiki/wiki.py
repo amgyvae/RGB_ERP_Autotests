@@ -756,10 +756,8 @@ def login_with(login_value, password_value):
         pass
     if not login_field or not pw_field:
         return False
-    login_field.clear()
-    login_field.send_keys(login_value)
-    pw_field.clear()
-    pw_field.send_keys(password_value)
+    type_text(login_field, login_value)
+    type_text(pw_field, password_value)
     for xp in ["//button[.//span[normalize-space(text())='Войти']]",
                "//button[contains(., 'Войти')]", "//button[@type='submit']"]:
         try:
@@ -770,7 +768,7 @@ def login_with(login_value, password_value):
                 break
         except Exception:
             continue
-    wait_for_state(lambda:driver.current_url.startswith(BASE_URL) and not is_login_page())
+    wait_for_state(lambda: not is_login_page() and bool(find_buttons(['Выйти']) or driver.find_elements(By.CSS_SELECTOR, 'aside, nav')), timeout=30)
     if is_login_page():
         log(f"  ⚠ Логин {login_value} не удался", "WARN")
         return False
@@ -2722,12 +2720,18 @@ def wiki_settled(timeout=WAIT):
 
 def wiki_open():
     driver.get(WIKI_URL)
+    if wait_for_state(is_login_page, timeout=2):
+        if not login_with(login_val, pass_val):
+            return False
+        driver.get(WIKI_URL)
     return bool(wait_for_state(lambda:wiki_title()=='Главная')) and wiki_settled()
 
 
 def stage_login():
-    if not wait_for_state(lambda:is_login_page() or driver.current_url.startswith(BASE_URL)):return False
-    if is_login_page() and not login_with(login_val,pass_val):return False
+    if not wait_for_state(lambda: is_login_page() or bool(find_buttons(['Выйти'])), timeout=30):
+        return False
+    if is_login_page() and not login_with(login_val, pass_val):
+        return False
     return wiki_open()
 
 

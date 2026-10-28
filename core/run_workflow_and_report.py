@@ -397,6 +397,69 @@ def _clean_reason(reason: str) -> str:
     return cleaned.strip()[:180]
 
 
+def classify_failure(reason: str, step_name: str = "") -> str:
+    """Классифицирует причину падения этапа: 'Ошибка кода' (автотест) или 'Баг сайта' (ERP-портал)."""
+    txt = f"{reason or ''} {step_name or ''}".lower()
+    code_markers = (
+        "nameerror", "typeerror", "attributeerror", "keyerror", "valueerror",
+        "indexerror", "importerror", "syntaxerror", "unboundlocalerror",
+        "is not defined", "has no attribute", "staleelement", "stale element",
+        "invalid selector", "javascriptexception", "не найден селектор",
+        "не найдена в форме", "модалка всё ещё открыта", "ожидался один input",
+        "код завершения", "нет достоверного полного отчёта",
+    )
+    if any(m in txt for m in code_markers):
+        return "Ошибка кода"
+    site_markers = (
+        "500", "502", "503", "504", "400", "403", "404", "internal server error",
+        "bad gateway", "загрузка", "статус не изменился", "не подтвержден",
+        "не сохранил", "счётчик", "показано", "отклонен", "валидация",
+        "ошибка при создании", "таблица не появилась", "недоступн",
+        "пуст", "превышено время ожидания", "таймаут",
+    )
+    if any(m in txt for m in site_markers):
+        return "Баг сайта"
+    if "не найден" in txt or "не открыл" in txt:
+        return "Ошибка кода / UI сайта"
+    return "Баг сайта"
+
+
+def save_suite_module_summary(script_name: str, module_label: str, passed_checks: int,
+                              total_checks: int, skipped_count: int, failed_items: list,
+                              error: str = ""):
+    try:
+        stem = Path(script_name).stem.lower()
+        out_path = LOGS_DIR / f"suite_module_{stem}.json"
+        failures = []
+        for name, reason in failed_items:
+            clean = _clean_reason(reason) or "см. лог"
+            failures.append({
+                "name": name,
+                "reason": clean,
+                "origin": classify_failure(clean, name),
+            })
+        if error and not failures:
+            clean_err = _clean_reason(error)
+            failures.append({
+                "name": "Запуск модуля",
+                "reason": clean_err,
+                "origin": classify_failure(clean_err, "Запуск модуля"),
+            })
+        payload = {
+            "script": os.path.basename(script_name),
+            "label": module_label,
+            "passed_checks": int(passed_checks),
+            "total_checks": int(total_checks),
+            "skipped_count": int(skipped_count),
+            "ok": bool(total_checks > 0 and passed_checks == total_checks and not failures and not error),
+            "error": _clean_reason(error) if error else "",
+            "failures": failures,
+        }
+        out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as exc:
+        print(f"[suite_summary] Не удалось сохранить сводку модуля {script_name}: {exc}")
+
+
 def send_telegram_summary(script_name: str, findings: list, reasons: dict,
                           *, skipped=(), error="", sheet_error="", screenshot=None):
     """Common summary and delivery for workflow modules, including Finance."""
@@ -404,6 +467,11 @@ def send_telegram_summary(script_name: str, findings: list, reasons: dict,
     total_checks = len(findings) + len(skipped)
     passed_checks = sum(bool(ok) for _, ok in findings)
     failed_items = [(name, reasons.get(name)) for name, ok in findings if not ok]
+
+    save_suite_module_summary(
+        script_name, module_label, passed_checks, total_checks,
+        len(skipped), failed_items, error=error
+    )
 
     if findings and not failed_items and not skipped and not error and (not sheet_error or sheet_error == "FileNotFoundError"):
         lines = [f"✅ <b>Автотест: {escape(module_label)} — УСПЕШНО</b> ({passed_checks}/{total_checks})", ""]
@@ -413,7 +481,8 @@ def send_telegram_summary(script_name: str, findings: list, reasons: dict,
         lines = [f"{emoji} <b>Автотест: {escape(module_label)} — {title}</b> ({passed_checks}/{total_checks} успешно)", ""]
 
     if error:
-        lines.append("❌ <b>Ошибка запуска:</b> " + escape(_clean_reason(error)))
+        origin = classify_failure(error, "Ошибка запуска")
+        lines.append(f"❌ <b>Ошибка запуска [{escape(origin)}]:</b> " + escape(_clean_reason(error)))
     if sheet_error and sheet_error != "FileNotFoundError":
         lines.append("⚠️ <b>Google Sheets:</b> " + escape(_clean_reason(sheet_error)))
 
@@ -425,7 +494,11 @@ def send_telegram_summary(script_name: str, findings: list, reasons: dict,
         else:
             reason = reasons.get(name)
             clean = _clean_reason(reason)
-            lines.append(f"{idx}. ❌ {escape(name)}" + (f" — <i>{escape(clean)}</i>" if clean else ""))
+            origin = classify_failure(clean, name)
+            lines.append(
+                f"{idx}. ❌ {escape(name)} <b>[{escape(origin)}]</b>"
+                + (f" — <i>{escape(clean)}</i>" if clean else "")
+            )
         idx += 1
 
     for name in skipped:
@@ -502,6 +575,12 @@ def contacts_summary(results, script_path=None):
     failed = [r for r in results if r['status'] == 'FAIL']
     skipped = [r for r in results if r['status'] == 'SKIP']
 
+    failed_items = [(checks[r['id'] - 1]['name'], r.get('reason', '')) for r in failed]
+    save_suite_module_summary(
+        "contacts_test.py", "Контакты", passed_count, total_count,
+        len(skipped), failed_items
+    )
+
     if not failed and not skipped:
         lines = [f"✅ <b>Автотест: Контакты — УСПЕШНО</b> ({passed_count}/{total_count})", ""]
     else:
@@ -517,7 +596,8 @@ def contacts_summary(results, script_path=None):
         if st == 'PASS':
             lines.append(f"{idx}. ✅ {name}")
         elif st == 'FAIL':
-            lines.append(f"{idx}. ❌ {name}" + (f" — <i>{escape(reason)}</i>" if reason else ""))
+            origin = classify_failure(reason, checks[r['id'] - 1]['name'])
+            lines.append(f"{idx}. ❌ {name} <b>[{escape(origin)}]</b>" + (f" — <i>{escape(reason)}</i>" if reason else ""))
         else:
             lines.append(f"{idx}. ⏸ {name}" + (f" — <i>{escape(reason)}</i>" if reason else " (пропущен)"))
 

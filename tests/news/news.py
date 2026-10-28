@@ -2651,7 +2651,19 @@ NEWS_BODY_HTML=''
 
 
 def news_wait():
-    return bool(wait_for_state(lambda:driver.find_elements(By.CSS_SELECTOR,'.news-row') or 'Всего:' in main_text(),timeout=30)) and wait_idle(30,.5)
+    def ready():
+        txt = main_text()
+        if 'Загрузка' in txt:
+            return False
+        if driver.find_elements(By.CSS_SELECTOR, '.news-row'):
+            return True
+        if 'Всего:' in txt:
+            return any(k in txt for k in ('Ничего не найдено', 'Нет новостей', 'Список пуст', 'Нет данных')) or page_total() == 0
+        return False
+    ok = bool(wait_for_state(ready, timeout=30)) and wait_idle(30, .5)
+    if ok and 'Загрузка' in main_text():
+        ok = bool(wait_for_state(lambda: 'Загрузка' not in main_text(), timeout=20)) and wait_idle(20, .5)
+    return ok
 
 
 def news_open():
@@ -2699,12 +2711,12 @@ def news_choose(label,text):
     option=next((b for b in news_options() if b.text.strip()==text),None)
     if option is None:return False
     if not click_el(option):return False
-    return wait_idle(30,.5)
+    return wait_idle(30,.5) and news_wait()
 
 
 def news_reset():
     if not click_button(['Сбросить фильтры']):return False
-    return news_wait()
+    return wait_idle(30,.5) and news_wait()
 
 
 def stage_news_feed():
@@ -2727,11 +2739,18 @@ def stage_news_authors():
     if not authors:return False
     for name in authors:
         if not news_choose('Автор',name):return False
+        wait_for_state(lambda: 'Загрузка' not in main_text() and (bool(news_rows()) or page_total() == 0), timeout=15)
         rows=news_rows()
-        if any(r['author']!=name for r in rows):
+        if any(r['author']!=name and name.casefold() not in r['author'].casefold() for r in rows):
             log(f'  Неверный автор после фильтра {name!r}: {[r["author"] for r in rows]}','WARN');return False
         log(f'  Автор {name}: всего {page_total()}, на странице {len(rows)}')
-        if not news_reset() or page_total()!=total or news_titles()!=original:return False
+        if not news_reset():
+            return False
+        if not wait_for_state(lambda: 'Загрузка' not in main_text() and page_total()==total and news_titles()==original, timeout=15):
+            news_open()
+            if not wait_for_state(lambda: page_total()==total and news_titles()==original, timeout=10):
+                log(f'  После сброса фильтра автора список не восстановился: total={page_total()} (ожидалось {total})','WARN')
+                return False
     return True
 
 

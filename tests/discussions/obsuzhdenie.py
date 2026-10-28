@@ -758,10 +758,8 @@ def login_with(login_value, password_value):
         pass
     if not login_field or not pw_field:
         return False
-    login_field.clear()
-    login_field.send_keys(login_value)
-    pw_field.clear()
-    pw_field.send_keys(password_value)
+    type_text(login_field, login_value)
+    type_text(pw_field, password_value)
     for xp in ["//button[.//span[normalize-space(text())='Войти']]",
                "//button[contains(., 'Войти')]", "//button[@type='submit']"]:
         try:
@@ -772,7 +770,7 @@ def login_with(login_value, password_value):
                 break
         except Exception:
             continue
-    wait_for_state(lambda:driver.current_url.startswith(BASE_URL) and not is_login_page())
+    wait_for_state(lambda: not is_login_page() and bool(find_buttons(['Выйти']) or driver.find_elements(By.CSS_SELECTOR, 'aside, nav')), timeout=30)
     if is_login_page():
         log(f"  ⚠ Логин {login_value} не удался", "WARN")
         return False
@@ -2559,6 +2557,10 @@ def list_cards():
 
 def disc_open():
     driver.get(DISC_URL)
+    if wait_for_state(is_login_page, timeout=2):
+        if not login_with(CURRENT_LOGIN or login_val, SECOND_PASS if CURRENT_LOGIN == SECOND_LOGIN else pass_val):
+            return False
+        driver.get(DISC_URL)
     def ready():
         if is_login_page() or not at_url(DISC_URL):return False
         total=page_total()
@@ -2575,8 +2577,10 @@ def switch_user(login,password):
 
 
 def stage_login():
-    if not wait_for_state(lambda:is_login_page() or driver.current_url.startswith(BASE_URL)):return False
-    if is_login_page() and not login_with(login_val,pass_val):return False
+    if not wait_for_state(lambda: is_login_page() or bool(find_buttons(['Выйти'])), timeout=30):
+        return False
+    if is_login_page() and not login_with(login_val, pass_val):
+        return False
     return disc_open()
 
 
