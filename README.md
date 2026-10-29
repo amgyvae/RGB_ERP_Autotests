@@ -132,7 +132,7 @@ flowchart TD
 ```text
 ├── .github/
 │   └── workflows/
-│       └── daily-autotests.yml     # CI/CD автоматизация (08:00 утра по Алматы, UTC+5)
+│       └── morning-autotests.yml   # CI/CD автоматизация (08:00 утра по Алматы, UTC+5)
 ├── config/
 │   ├── env_config.py               # Безопасный загрузчик настроек (.env / GitHub Secrets)
 │   └── .env.example                # Шаблон переменных окружения
@@ -262,7 +262,7 @@ copy .env.example .env  # Windows
 
 ### Вариант 1: GitHub Actions (Облако или Self-Hosted)
 
-В репозитории настроен workflow `.github/workflows/daily-autotests.yml`:
+В репозитории настроен workflow `.github/workflows/morning-autotests.yml`:
 * **Расписание**: `cron: '0 3 * * *'` — каждый день в **03:00 UTC** (что строго соответствует **08:00 утра по часовому поясу Казахстана UTC+5**).
 * **Ручной запуск**: Вкладка **Actions** → **Daily ERP Autotests** → кнопка **Run workflow** (с возможностью выбрать запуск конкретных модулей).
 

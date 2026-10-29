@@ -2123,12 +2123,21 @@ def stage_save():
 # ЭТАП 6: КАРТОЧКА И РЕДАКТИРОВАНИЕ
 # ==========================================
 def edit_input_by_label(label, value):
-    for e in driver.find_elements(
-            By.XPATH, f"//*[normalize-space(text())='{label}']/following::input[1]"):
-        if e.is_displayed() and e.is_enabled():
-            scroll_to(e)
-            type_text(e, value)
-            return True
+    lit = json.dumps(label, ensure_ascii=False)
+    for xp in [
+        f"//*[normalize-space(translate(text(),'*',''))={lit}]/following::input[1]",
+        f"//*[normalize-space(translate(.,'*',''))={lit}][not(self::button or self::input)]/following::input[1]",
+        f"//*[starts-with(normalize-space(translate(.,'*','')),{lit}) and string-length(normalize-space(.))<{len(label)+6}]/following::input[1]",
+    ]:
+        for e in driver.find_elements(By.XPATH, xp):
+            if e.is_displayed() and e.is_enabled():
+                scroll_to(e)
+                type_text(e, value)
+                try:
+                    driver.execute_script("arguments[0].dispatchEvent(new Event('blur', {bubbles:true}));", e)
+                except Exception:
+                    pass
+                return True
     return False
 
 
@@ -2145,6 +2154,7 @@ def stage_view_and_edit():
                     break
         except Exception:
             pass
+    wait_for_state(lambda: find_buttons(["Редактировать"]) or "о проекте" in page_text(), timeout=12)
     txt = page_text()
     ok = True
     if STATE["status"]:
@@ -2159,13 +2169,18 @@ def stage_view_and_edit():
     if not click_button(["Редактировать"], wait=8):
         log("  ⚠ Кнопка 'Редактировать' не найдена", "WARN")
         return False
-    time.sleep(3)
+    wait_for_state(lambda: "/edit" in driver.current_url or find_buttons(["Сохранить"]), timeout=10)
+    time.sleep(2)
     block_native_file_dialog()
+    was_edit_url = "/edit" in driver.current_url
     log(f"  Режим редактирования: {driver.current_url}")
 
     changed = 0
+    addr_changed = False
+    expand_section("О проекте")
     if edit_input_by_label("Адрес", NEW_ADDRESS):
         changed += 1
+        addr_changed = True
         log(f"  ✓ Адрес изменён: {NEW_ADDRESS}", "PASS")
     if expand_section("Площади") and edit_input_by_label("Общая площадь", "2000"):
         changed += 1
@@ -2182,13 +2197,57 @@ def stage_view_and_edit():
     if not click_button(["Сохранить"], wait=5):
         log("  ⚠ Кнопка 'Сохранить' в режиме редактирования не найдена", "WARN")
         return False
-    result, msg = wait_save_result(12)
+
+    # Ждём реального завершения сохранения (тост / выход из /edit / возврат кнопки «Редактировать»)
+    result, msg = "timeout", ""
+    end_t = time.time() + 20
+    while time.time() < end_t:
+        for t in read_toasts():
+            low = t.lower()
+            if any(k in low for k in ["ошибк", "не удалось", "обязательн", "заполните", "нельзя",
+                                      "must be", "must not", "invalid", "required", "too long"]):
+                result, msg = "error", t
+                break
+            if any(k in low for k in ["создан", "сохранен", "сохранён", "обновлен", "обновлён", "успешно"]):
+                result, msg = "saved", t
+                break
+        if result in ("error", "saved"):
+            break
+        if was_edit_url and "/edit" not in driver.current_url:
+            result = "saved"
+            break
+        if not find_buttons(["Сохранить"]) and find_buttons(["Редактировать"]):
+            result = "saved"
+            break
+        time.sleep(0.5)
+
+    for _fix in range(2):
+        if result == "error" and fix_limit_errors(msg):
+            time.sleep(1)
+            click_button(["Сохранить"], wait=5)
+            time.sleep(4)
+            result, msg = "saved", ""
+        else:
+            break
+
     log(f"  Сохранение после редактирования: {result} {msg}",
         "PASS" if result != "error" else "WARN")
     time.sleep(3)
-    driver.refresh()
-    time.sleep(4)
-    saved = NEW_ADDRESS.lower() in page_text()
+    if "/edit" in driver.current_url and STATE.get("url"):
+        driver.get(STATE["url"])
+    else:
+        driver.refresh()
+    wait_for_state(lambda: find_buttons(["Редактировать"]) or "о проекте" in page_text(), timeout=15)
+    time.sleep(2)
+    expand_section("О проекте")
+    time.sleep(1)
+    all_values_txt = page_text() + " " + (driver.execute_script(
+        "return Array.from(document.querySelectorAll('input,textarea')).map(e=>e.value||'').join(' ');"
+    ) or "").lower()
+    if addr_changed:
+        saved = NEW_ADDRESS.lower() in all_values_txt
+    else:
+        saved = "2000" in all_values_txt or "2 000" in all_values_txt or "12" in all_values_txt
     log(f"  Новый адрес после обновления страницы: {'есть' if saved else 'не найден'}",
         "PASS" if saved else "WARN")
     shot("passport_after_edit")

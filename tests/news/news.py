@@ -2879,16 +2879,28 @@ def stage_news_existing_menu():
 
 def stage_news_existing_cards():
     if not news_open():return False
-    # Prefer already read records; no like/comment/edit actions on existing news.
-    titles=[r['title'] for r in news_rows() if not r['unread']][:4]
-    if not titles:log('  Нет уже прочитанных карточек для просмотра','WARN');return False
+    # Prefer already read published records (skip drafts); no like/comment/edit actions on existing news.
+    rows=news_rows()
+    titles=[r['title'] for r in rows if r['title'] and not r['unread'] and not r['draft']][:4]
+    if not titles:
+        titles=[r['title'] for r in rows if r['title'] and not r['draft']][:4]
+    if not titles:
+        log('  Нет опубликованных карточек для просмотра','WARN');return False
     for title in titles:
-        if not news_open():return False
-        row=next((e for e in driver.find_elements(By.CSS_SELECTOR,'.news-row') if e.find_element(By.CSS_SELECTOR,'.news-row__title').text.strip()==title),None)
-        if row is None or not click_el(row.find_element(By.CSS_SELECTOR,'.news-row__main')):return False
-        if not wait_for_state(lambda:not at_url(NEWS_URL)) or not wait_idle(8,.5):return False
+        if not news_open():
+            log(f'  Не удалось вернуться в ленту перед открытием «{title}»','WARN');return False
+        row=next((e for e in driver.find_elements(By.CSS_SELECTOR,'.news-row')
+                  if e.find_element(By.CSS_SELECTOR,'.news-row__title').text.strip()==title
+                  and 'черновик' not in (e.text or '').lower()),None)
+        if row is None or not click_el(row.find_element(By.CSS_SELECTOR,'.news-row__main')):
+            log(f'  Не удалось кликнуть по карточке новости «{title}»','WARN');return False
+        if not wait_for_state(lambda:not at_url(NEWS_URL) and 'Загрузка' not in main_text() and title[:30] in main_text(),timeout=20):
+            log(f'  Карточка новости «{title}» не загрузилась вовремя (URL: {driver.current_url})','WARN');return False
+        wait_idle(12,.6)
         text=main_text()
-        if title not in text or not DATE_ITEM_RE.search(text) or not page_health('Новость/чтение'):return False
+        has_date=bool(DATE_ITEM_RE.search(text) or re.search(r'\d{1,2}[.\s]+[а-яА-ЯёЁ0-9]{2,12}[.\s]+\d{4}',text))
+        if title[:40] not in text or not has_date or not page_health('Новость/чтение'):
+            log(f'  Проверка карточки «{title}» не пройдена (title_ok={title[:40] in text}, date_ok={has_date})','WARN');return False
         log(f'  Прочитана карточка: {title}')
     return True
 

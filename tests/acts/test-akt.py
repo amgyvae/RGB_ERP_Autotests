@@ -4616,61 +4616,19 @@ def main():
         return
     workflow_result['workflow_started'] = True
     # --- ЭТАП 5: Маршрут согласования ---
-    log("ЭТАП 5: Маршрут согласования (Алдажаров)")
+    log("ЭТАП 5: Маршрут согласования (Sh Margulan Ju)")
     dismiss_chrome_password_popup()
+    from route_helper import setup_margulan_route, route_only_margulan
     for retry in range(3):
         driver.refresh()
         wait_card_ready()
         go_to_details_tab()
         dismiss_chrome_password_popup()
-        try:
-            already = False
-            vals = driver.find_elements(
-                By.XPATH,
-                "//section[contains(@class,'evd-route')]"
-                "//div[contains(@class,'evd-route__stages')]"
-                "//span[contains(@class,'ui-select__value')]")
-            for v in vals:
-                if not v.is_displayed():
-                    continue
-                txt = (v.get_attribute("textContent") or "").strip()
-                if "алд" in txt.lower() and "выбрать" not in txt.lower():
-                    log(f"  ✓ Маршрут уже настроен ('{txt}')", "PASS")
-                    workflow_result["route"] = True
-                    already = True
-                    break
-            if not already:
-                cells = driver.find_elements(
-                    By.XPATH,
-                    "//section[contains(@class,'evd-route')]"
-                    "//table[contains(@class,'evd-route__table')]//tbody//td")
-                for c in cells:
-                    if not c.is_displayed():
-                        continue
-                    txt = (c.get_attribute("textContent") or "").strip()
-                    low = txt.lower()
-                    if ("алд" in low and txt not in {"—", "-"} and not low.isdigit()
-                            and "выбрать" not in low and len(txt) > 2
-                            and any(ch.isalpha() for ch in txt)):
-                        log(f"  ✓ Маршрут уже настроен (в таблице: '{txt}')", "PASS")
-                        workflow_result["route"] = True
-                        already = True
-                        break
-            if already:
-                break
-        except Exception:
-            pass
-
-        if add_approval_route():
+        if route_only_margulan(driver) or setup_margulan_route(driver, log=log):
             workflow_result["route"] = True
             break
         workflow_result["fail_reasons"]["Маршрут согласования"] = (
-            "не удалось создать этап или выбрать согласующего в маршруте")
-        try:
-            for _ in range(4):
-                ActionChains(driver).send_keys(Keys.ESCAPE).perform()
-        except Exception:
-            pass
+            "не удалось создать этап или выбрать Sh Margulan Ju в маршруте")
 
     # --- ЭТАП 6: Подписанты ---
     log("ЭТАП 6: Подписанты (Заказчик=Бейсембаев, Контрагент=Алдажаров Диас)")

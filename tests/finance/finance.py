@@ -1036,6 +1036,9 @@ def parse_total():
     return None
 
 def route_has_approver():
+    from route_helper import route_only_margulan, is_margulan_name
+    if route_only_margulan(driver):
+        return True
     txt = page_text().lower()
     m = re.search(r"маршрут согласования(.*?)утверждающий", txt, re.S)
     seg = m.group(1) if m else ""
@@ -1044,91 +1047,14 @@ def route_has_approver():
         seg = m2.group(1) if m2 else ""
     if not seg:
         return False
-    has_person = any(word in seg for word in ("margulan", "маргулан", "ерлан", "талгатович", "талгат", "бейсембаев", "куаныш", "едилович", "алдажаров", "диас"))
     is_placeholder = "выбрать согласующего" in seg or "не назначен" in seg or "этапы согласования не настроены" in seg
-    return has_person and not is_placeholder
-
-def approver_trigger():
-    try:
-        for t in driver.find_elements(
-                By.XPATH,
-                "//button[contains(@class,'ui-select__trigger')]"
-                "[.//span[contains(normalize-space(text()),'Выбрать согласующего')]]"):
-            if t.is_displayed():
-                return t
-    except Exception:
-        pass
-    return None
+    has_other = any(word in seg for word in ("ерлан", "талгатович", "талгат", "бейсембаев", "куаныш", "едилович", "алдажаров", "диас"))
+    return is_margulan_name(seg) and not has_other and not is_placeholder
 
 def add_approver():
+    from route_helper import setup_margulan_route
     goto_card()
-    if route_has_approver():
-        log("  ✓ Согласующий уже в маршруте", "PASS")
-        return True
-    trg = approver_trigger()
-    if trg is None:
-        clicked = click_button(["Добавить этап"], wait=5) or \
-            click_text_deepest("Добавить этап", "exact")
-        if not clicked:
-            log("  • 'Добавить этап' не найдено — пробую '+ Этап'")
-            clicked = click_button(["Этап", "+ Этап"], wait=2)
-        log(f"  Нажато 'Добавить этап': {clicked}")
-        for _ in range(16):
-            trg = approver_trigger()
-            if trg:
-                break
-            time.sleep(0.5)
-    if trg is None:
-        # кнопка «Добавить» (согласующего) в шапке этапа
-        try:
-            b = driver.find_element(
-                By.XPATH,
-                "//*[contains(normalize-space(text()),' этап')]"
-                "/following::button[normalize-space(.)='Добавить'][1]")
-            click_el(b)
-            time.sleep(1.5)
-            trg = approver_trigger()
-        except Exception:
-            pass
-    if trg is None:
-        log("  ⚠ Селект 'Выбрать согласующего' не найден", "WARN")
-        return False
-
-    panel = open_ui(trg)
-    if not panel:
-        log("  ⚠ Список согласующих не открылся", "WARN")
-        return False
-    picked = select_in_panel(panel, keywords=["sh margulan ju", "margulan", "маргулан"], search="Margulan")
-    if not picked:
-        s = panel_search(panel)
-        if s:
-            type_text(s, "")
-            time.sleep(1.0)
-        picked = select_in_panel(panel, keywords=["sh margulan ju", "margulan", "маргулан", "ерлан талгатович", "ерлан", "талгатович", "бейсембаев куаныш едилович", "алдажаров", "талгат"])
-    if not picked:
-        picked = select_in_panel(panel, index=0)
-    if not picked:
-        log("  ⚠ Согласующий не найден в списке", "WARN")
-        close_panels()
-        return False
-    log(f"  ✓ Согласующий выбран: {picked}", "PASS")
-    time.sleep(1.5)
-
-    # на случай старого варианта — модалка «Согласующие»
-    m = find_modal("Согласующ")
-    if m:
-        b = modal_button(m, ["Сохранить", "Добавить", "ОК", "Применить"])
-        if b:
-            click_el(b)
-            wait_modal_closed("Согласующ", 6)
-
-    for _ in range(8):
-        if route_has_approver():
-            log("  ✓ Маршрут согласования настроен", "PASS")
-            return True
-        time.sleep(1)
-    log(f"  ⚠ Согласующий ({APPROVER_QUERY}) не появился в маршруте", "WARN")
-    return False
+    return setup_margulan_route(driver, log=log)
 
 def try_open_and_cancel(text):
     goto_card()
@@ -2986,10 +2912,10 @@ def run():
         step("ГФР: карточка — секции, вкладки, кнопки", stage_card_buttons)
 
         # Этап 10: ГФР согласующий
-        step("ГФР: маршрут согласования — Ерлан Талгатович", add_approver)
+        step("ГФР: маршрут согласования — Sh Margulan Ju", add_approver)
 
         # Этап 11: ГФР утверждающий
-        step("ГФР: утверждающий — Талгат Ерланович", add_approver_final)
+        step("ГФР: утверждающий — Sh Margulan Ju", add_approver_final)
 
         # Этап 12: ГФР обсуждение
         step("ГФР: обсуждение — сообщение и файл", stage_discussion)
@@ -3017,10 +2943,10 @@ def run():
 
         if CONTINUE_APPROVAL:
             # Этап 20: ГФР согласование
-            step("ГФР: «Согласовать» (Ерлан Талгатович)", stage_approve_main)
+            step("ГФР: «Согласовать» (Sh Margulan Ju)", stage_approve_main)
 
             # Этап 21: ГФР утверждение
-            step("ГФР: «Утвердить» (Талгат Ерланович)", stage_confirm_by_talgat)
+            step("ГФР: «Утвердить» (Sh Margulan Ju)", stage_confirm_by_talgat)
     except Exception as e:
         RUN_ERROR = f"{type(e).__name__}: {e}"
         log(f"КРИТИЧЕСКАЯ ОШИБКА: {e}", "FAIL")

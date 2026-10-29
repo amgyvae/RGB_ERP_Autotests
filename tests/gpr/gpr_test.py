@@ -1014,11 +1014,11 @@ class GprTest:
         raise StepFailed(f"В списке «{placeholder}» не найден аккаунт Алдажарова (поиск по «Алд»)")
 
     def s14_route(self):
-        self.click("//button[contains(normalize-space(.),'Этап') and not(contains(.,'Добавить'))]")
-        self.assert_text("1 этап", timeout=10)
-        name = self._pick_owned_person("Выбрать согласующего", "reviewer")
-        log(f"  [i] согласующий: {name}")
-        self.assert_text(name.split("\n")[0])
+        from route_helper import setup_margulan_route
+        if not setup_margulan_route(self.d, log=lambda m, *a: log(m)):
+            raise StepFailed("Не удалось настроить маршрут согласования с пользователем Sh Margulan Ju")
+        self.reviewer_account = (login_val, pass_val, SECOND_P12_PATH, SECOND_NCA_PASSWORD)
+        log("  [i] согласующий в маршруте: Sh Margulan Ju")
 
     def s15_approver(self):
         self.click("(//*[contains(normalize-space(text()),'Утвержда')]/following::button"

@@ -4485,74 +4485,25 @@ def main():
     go_to_general_info()
     time.sleep(2)
 
-    # --- ЭТАП 7: Маршрут согласования (Margulan Sh, либо fallback) ---
-    log("ЭТАП 7: Маршрут согласования (согласующий = Margulan Sh, либо fallback)")
+    # --- ЭТАП 7: Маршрут согласования (Sh Margulan Ju) ---
+    log("ЭТАП 7: Маршрут согласования (согласующий = Sh Margulan Ju)")
     dismiss_chrome_password_popup()
+    from route_helper import setup_margulan_route, route_only_margulan
     for retry in range(3):
         go_to_general_info()
         dismiss_chrome_password_popup()
         time.sleep(1)
-        try:
-            # ВАЖНО: проверять ТОЛЬКО внутри секции маршрута!
-            # Раньше поиск шёл по всей странице — а 'Sh Margulan Ju'
-            # это имя ЗАЛОГИНЕННОГО пользователя в шапке справа вверху.
-            # Условие всегда было истинным, скрипт писал "Маршрут уже
-            # настроен" и НИ РАЗУ не вызывал add_approval_route().
-            route_values = driver.find_elements(
-                By.XPATH,
-                "//section[contains(@class,'evd-route')]"
-                "//div[contains(@class,'evd-route__stages')]"
-                "//span[contains(@class,'ui-select__value')]")
-            already = False
-            for v in route_values:
-                if not v.is_displayed():
-                    continue
-                txt = (v.get_attribute("textContent") or "").strip()
-                if txt and "выбрать" not in txt.lower():
-                    log(f"  ✓ Маршрут уже настроен (согласующий: '{txt}')", "PASS")
-                    workflow_result["actions_done"].append(f"Маршрут: {txt}")
-                    workflow_result["approval_route"] = True
-                    already = True
-                    break
-
-            # После сохранения модалки имя рендерится обычным текстом
-            # в ячейке таблицы маршрута (а не в ui-select__value)
-            if not already:
-                cells = driver.find_elements(
-                    By.XPATH,
-                    "//section[contains(@class,'evd-route')]"
-                    "//table[contains(@class,'evd-route__table')]//tbody//td")
-                for c in cells:
-                    if not c.is_displayed():
-                        continue
-                    txt = (c.get_attribute("textContent") or "").strip()
-                    low = txt.lower()
-                    if (txt and txt not in {"—", "-"} and not low.isdigit()
-                            and "выбрать" not in low and len(txt) > 2
-                            and any(ch.isalpha() for ch in txt)):
-                        log(f"  ✓ Маршрут уже настроен (в таблице: '{txt}')", "PASS")
-                        workflow_result["actions_done"].append(f"Маршрут: {txt}")
-                        workflow_result["approval_route"] = True
-                        already = True
-                        break
-
-            if already:
-                break
-        except Exception:
-            pass
-
-        if add_approval_route(approver_query="Бейсембаев"):
-            workflow_result["actions_done"].append("Маршрут: согласующий проставлен")
+        if route_only_margulan(driver) or setup_margulan_route(driver, log=log):
+            workflow_result["actions_done"].append("Маршрут: Sh Margulan Ju")
             workflow_result["approval_route"] = True
             break
-        else:
-            try:
-                for _ in range(4):
-                    ActionChains(driver).send_keys(Keys.ESCAPE).perform()
-                    time.sleep(0.5)
-            except Exception:
-                pass
-            time.sleep(3)
+        try:
+            for _ in range(3):
+                ActionChains(driver).send_keys(Keys.ESCAPE).perform()
+                time.sleep(0.4)
+        except Exception:
+            pass
+        time.sleep(2)
 
     go_to_general_info()
     time.sleep(2)
@@ -4608,23 +4559,12 @@ def main():
     else:
         log("  ⚠ Не удалось отправить на согласование", "WARN")
 
-    # --- ЭТАП 9.5: Согласовать ---
-    # ВАЖНО: согласовать может ТОЛЬКО тот, кто назначен согласующим в
-    # маршруте (см. ЭТАП 7 — approver_query="Бейсембаев"). Раньше здесь
-    # жали "Согласовать" под тем, кто уже залогинен (создатель) — это
-    # самосогласование, система его закономерно отклоняла. Теперь
-    # сначала логинимся именно под назначенным согласующим.
-    log("ЭТАП 9.5: 'Согласовать' под назначенным согласующим (Бейсембаев)")
+    # --- ЭТАП 9.5: Согласовать (под Sh Margulan Ju) ---
+    log("ЭТАП 9.5: 'Согласовать' под назначенным согласующим (Sh Margulan Ju)")
     time.sleep(2)
-    if not logout_current_account():
-        driver.get(BASE_URL)
-        time.sleep(4)
-    if not login_with(SECOND_LOGIN, SECOND_PASS):
-        log("  ⚠ Не удалось войти под согласующим (Бейсембаев)", "WARN")
-    else:
-        driver.get(workflow_result["url"])
-        time.sleep(4)
-        dismiss_chrome_password_popup()
+    driver.get(workflow_result["url"])
+    time.sleep(4)
+    dismiss_chrome_password_popup()
 
     go_to_general_info()
     time.sleep(2)

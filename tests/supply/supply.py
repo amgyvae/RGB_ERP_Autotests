@@ -145,7 +145,7 @@ ESTIMATE_SEARCH = ["автотест", "AutoTest"]
 REVIEWER_LOGIN = 'dias.aldazharov@bk.ru'
 REVIEWER_PASS = 'h7WxqKIR'
 
-APPROVER_QUERY = 'Бейсембаев'
+APPROVER_QUERY = 'Margulan'
 
 # Соисполнитель («Поделиться»): сначала Талгат, если нет в списке — Рыспамбетов Асылхан Курметович
 COEXEC_TRIES = [('Алдажаров', ['алдажаров', 'алдазаров']), ('Диас', ['диас'])]
@@ -881,7 +881,10 @@ def is_login_page():
     except Exception:
         return False
 
+_CURRENT_LOGIN = None
+
 def login_with(login_value, password_value):
+    global _CURRENT_LOGIN
     log(f"  Логин под: {login_value}")
     try:
         WebDriverWait(driver, WAIT).until(EC.visibility_of_element_located(
@@ -927,11 +930,14 @@ def login_with(login_value, password_value):
     if is_login_page():
         log(f"  ⚠ Логин {login_value} не удался", "WARN")
         return False
+    _CURRENT_LOGIN = login_value
     log(f"  ✓ Успешный вход: {login_value}", "PASS")
     dismiss_news_popup(wait=2)
     return True
 
 def logout_current_account():
+    global _CURRENT_LOGIN
+    _CURRENT_LOGIN = None
     log('  Выход из текущего аккаунта...')
     try:
         els=[e for e in driver.find_elements(By.XPATH,
@@ -983,67 +989,9 @@ def approver_trigger():
     return None
 
 def add_approver():
+    from route_helper import setup_margulan_route
     goto_card()
-    if route_has_approver():
-        log("  ✓ Согласующий уже в маршруте", "PASS")
-        return True
-    trg = approver_trigger()
-    if trg is None:
-        clicked = click_button(["Добавить этап"], wait=5) or \
-            click_text_deepest("Добавить этап", "exact")
-        if not clicked:
-            log("  • 'Добавить этап' не найдено — пробую '+ Этап'")
-            clicked = click_button(["Этап", "+ Этап"], wait=2)
-        log(f"  Нажато 'Добавить этап': {clicked}")
-        for _ in range(16):
-            trg = approver_trigger()
-            if trg:
-                break
-            time.sleep(0.5)
-    if trg is None:
-        # кнопка «Добавить» (согласующего) в шапке этапа
-        try:
-            b = driver.find_element(
-                By.XPATH,
-                "//*[contains(normalize-space(text()),' этап')]"
-                "/following::button[normalize-space(.)='Добавить'][1]")
-            click_el(b)
-            time.sleep(1.5)
-            trg = approver_trigger()
-        except Exception:
-            pass
-    if trg is None:
-        log("  ⚠ Селект 'Выбрать согласующего' не найден", "WARN")
-        return False
-
-    panel = open_ui(trg)
-    if not panel:
-        log("  ⚠ Список согласующих не открылся", "WARN")
-        return False
-    picked = select_in_panel(panel, keywords=["бейсембаев"],
-                             search=APPROVER_QUERY, exclude=["aisinov"])
-    if not picked:
-        log(f"  ⚠ '{APPROVER_QUERY}' не найден в списке", "WARN")
-        close_panels()
-        return False
-    log(f"  ✓ Согласующий выбран: {picked}", "PASS")
-    time.sleep(1.5)
-
-    # на случай старого варианта — модалка «Согласующие»
-    m = find_modal("Согласующ")
-    if m:
-        b = modal_button(m, ["Сохранить", "Добавить", "ОК", "Применить"])
-        if b:
-            click_el(b)
-            wait_modal_closed("Согласующ", 6)
-
-    for _ in range(8):
-        if route_has_approver():
-            log("  ✓ Маршрут согласования настроен", "PASS")
-            return True
-        time.sleep(1)
-    log("  ⚠ Бейсембаев Куаныш не появился в маршруте", "WARN")
-    return False
+    return setup_margulan_route(driver, log=log)
 
 def try_open_and_cancel(text):
     goto_card()
@@ -1061,7 +1009,13 @@ def try_open_and_cancel(text):
             time.sleep(3)
     else:
         try:
-            ActionChains(driver).send_keys(Keys.ESCAPE).perform()
+            m_open = find_modal()
+            if m_open is not None:
+                hs = [h for h in m_open.find_elements(By.XPATH, ".//h2 | .//h3") if h.is_displayed()]
+                if hs:
+                    click_el(hs[0])
+            else:
+                ActionChains(driver).send_keys(Keys.ESCAPE).perform()
         except Exception:
             pass
     log(f"  ✓ '{text}': открыто и закрыто", "PASS")
@@ -1245,15 +1199,25 @@ return t.trim();
 """
 
 JS_DATE_TRIGGERS = r"""
+var root = arguments[0] || document;
 function vis(e){ return !!(e.offsetWidth || e.offsetHeight || e.getClientRects().length); }
-var all = Array.prototype.slice.call(document.querySelectorAll('[class*="ui-date-picker__trigger"]'));
+var all = Array.prototype.slice.call(root.querySelectorAll('[class*="ui-date-picker__trigger"], input[type="date"]'));
 all = all.filter(vis);
 return all.filter(function(e){ return !all.some(function(o){ return o !== e && o.contains(e); }); });
 """
 
 JS_CAL = r"""
-var p = null, ps = document.querySelectorAll('[class*="ui-date-picker__panel"], [class*="date-picker__popover"], [role="dialog"]');
-for (var i = 0; i < ps.length; i++) { if (ps[i].offsetWidth && /\d{4}/.test(ps[i].innerText || '')) { p = ps[i]; break; } }
+var p = null, ps = document.querySelectorAll('[class*="ui-date-picker__panel"], [class*="date-picker__popover"], [class*="datepicker"]');
+for (var i = ps.length - 1; i >= 0; i--) { if (ps[i].offsetWidth && /\d{4}/.test(ps[i].innerText || '')) { p = ps[i]; break; } }
+if (!p) {
+    var ds = document.querySelectorAll('[role="dialog"]');
+    for (var d = ds.length - 1; d >= 0; d--) {
+        var el = ds[d];
+        if (el.offsetWidth && !el.querySelector('.action-modal__body') && !/action-modal/i.test(el.className || '') && /\d{4}/.test(el.innerText || '')) {
+            p = el; break;
+        }
+    }
+}
 if (!p) return null;
 var title = ''; var lines = (p.innerText || '').split('\n');
 for (var j = 0; j < lines.length; j++) { if (/[А-Яа-я]+\s+\d{4}/.test(lines[j])) { title = lines[j].trim(); break; } }
@@ -1285,11 +1249,15 @@ def date_empty(trigger):
     t = date_text(trigger).strip().lower()
     return (not t) or ("выбрат" in t) or ("дд" in t and "гггг" in t)
 
-def date_triggers():
+def date_triggers(scope=None):
     try:
-        xs = driver.execute_script(JS_DATE_TRIGGERS)
+        xs = driver.execute_script(JS_DATE_TRIGGERS, scope)
         if xs:
             return xs
+        if scope is not None:
+            xs = driver.execute_script(JS_DATE_TRIGGERS, None)
+            if xs:
+                return xs
     except Exception:
         pass
     return []
@@ -1384,7 +1352,13 @@ def pick_date(trigger, target):
                 if wait_for_state(lambda:not date_empty(trigger),timeout=3):
                     return True
         try:
-            ActionChains(driver).send_keys(Keys.ESCAPE).perform()
+            m_open = find_modal()
+            if m_open is not None:
+                hs = [h for h in m_open.find_elements(By.XPATH, ".//h2 | .//h3") if h.is_displayed()]
+                if hs:
+                    click_el(hs[0])
+            else:
+                ActionChains(driver).send_keys(Keys.ESCAPE).perform()
         except Exception:
             pass
         time.sleep(0.4)
@@ -1477,8 +1451,11 @@ def section_text(title):
 
 
 def route_has_approver():
-    seg = section_text("Маршрут согласования").lower()
-    return "бейсембаев" in seg and "куаныш" in seg
+    from route_helper import route_only_margulan, is_margulan_name
+    if route_only_margulan(driver):
+        return True
+    seg = section_text("Маршрут согласования")
+    return is_margulan_name(seg)
 
 
 def goto_card():
@@ -1826,23 +1803,64 @@ def fill_required(modal_hint, specs, passes=3):
     return missing
 
 
-def num_field(scope, label, value, only_empty=True):
+def num_field(scope, label, value, only_empty=False):
+    literal = json.dumps(label, ensure_ascii=False)
+    inp = None
     try:
+        captions = scope.find_elements(
+            By.XPATH,
+            f".//*[normalize-space(translate(.,'*',''))={literal} or starts-with(normalize-space(translate(.,'*','')),{literal})]"
+            "[not(self::button or self::input or self::select) and not(ancestor::button)]"
+        )
+        for cap in captions:
+            if not cap.is_displayed():
+                continue
+            txt_cap = " ".join((cap.get_attribute("textContent") or "").replace("*", "").split()).strip()
+            if len(txt_cap) > len(label) + 6:
+                continue
+            cur = cap
+            for _ in range(5):
+                parents = cur.find_elements(By.XPATH, "./parent::*")
+                if not parents:
+                    break
+                cur = parents[0]
+                inps = [
+                    i for i in cur.find_elements(By.XPATH, ".//input[not(@type='hidden') and not(@type='file') and not(@type='checkbox') and not(@type='radio')]")
+                    if i.is_displayed() and i.is_enabled()
+                ]
+                if len(inps) == 1:
+                    inp = inps[0]
+                    break
+                if len(inps) > 1 or cur == scope:
+                    break
+            if inp is not None:
+                break
+    except Exception:
+        pass
+    if inp is None:
+        for xp in [
+            f".//*[normalize-space(translate(text(),'*',''))={literal}]/following::input[1]",
+            f".//*[starts-with(normalize-space(translate(.,'*','')),{literal}) and string-length(normalize-space(.))<{len(label)+6}]/following::input[1]",
+        ]:
+            try:
+                cand = scope.find_element(By.XPATH, xp)
+                if cand.is_displayed() and cand.is_enabled():
+                    inp = cand
+                    break
+            except Exception:
+                continue
+    if inp is not None:
         try:
-            inp = scope.find_element(
-                By.XPATH, f".//*[normalize-space(text())='{label}']/following::input[1]")
-        except Exception:
-            inp = scope.find_element(
-                By.XPATH, f".//*[starts-with(normalize-space(text()),'{label}') and string-length(normalize-space(text()))<{len(label)+4}]/following::input[1]")
-        if inp.is_displayed() and inp.is_enabled():
-            if not (only_empty and (inp.get_attribute("value") or "").strip()):
+            cur_v = (inp.get_attribute("value") or "").strip()
+            is_zero_or_empty = (not cur_v) or cur_v in ("0", "0,00", "0.00", "0,0", "0.0")
+            if not only_empty or is_zero_or_empty:
                 type_text(inp, value)
             v = (inp.get_attribute("value") or "").strip()
             log(f"    {'✓' if v else '⚠'} {label}: {v}", "PASS" if v else "WARN")
             return bool(v)
-    except Exception:
-        pass
-    log(f"    ⚠ Поле «{label}» не найдено", "WARN")
+        except Exception:
+            pass
+    log(f"    • Поле «{label}» не найдено", "INFO")
     return False
 
 
@@ -1861,7 +1879,8 @@ def fill_textarea(scope, text):
 def fill_dates_in(scope_hint_labels, start_days=0, length_days=7):
     """Все пустые даты в открытой модалке: начало — сегодня+start_days, конец — позже на length_days."""
     today = dtm.date.today()
-    trs = [t for t in date_triggers() if date_empty(t)]
+    scope_el = scope_hint_labels if hasattr(scope_hint_labels, "find_elements") else find_modal()
+    trs = [t for t in date_triggers(scope_el) if date_empty(t)]
     n = 0
     for k, t in enumerate(trs):
         try:
@@ -1879,10 +1898,13 @@ def fill_dates_in(scope_hint_labels, start_days=0, length_days=7):
 
 # ---------- вход ----------
 def stage_login():
+    global _CURRENT_LOGIN
     log(f"  URL: {driver.current_url}")
     if is_login_page():
         if not login_with(login_val, pass_val):
             return False
+    else:
+        _CURRENT_LOGIN = login_val
     driver.get(SUPPLY_URL)
     wait_for_state(lambda:is_login_page() or supply_list_at(SUPPLY_URL))
     if is_login_page():
@@ -1893,6 +1915,8 @@ def stage_login():
 
 
 def switch_user(login, password):
+    if not is_login_page() and _CURRENT_LOGIN == login:
+        return True
     if not logout_current_account():
         driver.get(BASE_URL)
         wait_for_state(is_login_page)
@@ -2568,10 +2592,11 @@ def advance_to_end():
     global ROLE_RESTORE_FAILED
     actions = 0
     st = get_status()
+    extra_groups = [] if STATE.get('url') == STATE.get('supply_url') else [TO_EXTRA]
     try:
         for account, password, who, groups in (
-            (REVIEWER_LOGIN, REVIEWER_PASS, 'Бейсембаев Куаныш', [TO_APPROVE]),
-            (SECOND_LOGIN, SECOND_PASS, 'Алдажаров Диас', [TO_APPROVE, TO_CONFIRM] + ([] if STATE.get('url')==STATE.get('supply_url') else [TO_EXTRA])),
+            (login_val, pass_val, 'Sh Margulan Ju', [TO_APPROVE, TO_CONFIRM] + extra_groups),
+            (SECOND_LOGIN, SECOND_PASS, 'Алдажаров Диас', [TO_APPROVE, TO_CONFIRM] + extra_groups),
         ):
             if status_terminal(st):
                 break
@@ -3173,52 +3198,120 @@ def stage_equip_position():
         log("  ⚠ Окно «Добавить позицию» не открылось", "WARN")
         return False
     rows0, total0 = lines_state()
+    try:
+        lbl_dump = driver.execute_script("""
+            var m = arguments[0];
+            return Array.from(m.querySelectorAll('label, [class*=label]'))
+                .filter(e => e.offsetWidth || e.offsetHeight)
+                .map(e => (e.innerText || '').trim().replace(/\\s+/g, ' '))
+                .filter(Boolean);
+        """, modal) or []
+        log(f"  Поля окна позиции техники: {lbl_dump[:20]}")
+    except Exception:
+        pass
+    if control_by_label(modal, "Из строки сметы"):
+        fill_select(modal, "Из строки сметы")
+        time.sleep(0.8)
     specs = [
         ("Тип техники", {}),
         ("Вид техники", {}),
+        ("Наименование", {}),
+        ("Техника", {}),
         ("Владение", {}),
+        ("Форма владения", {}),
         ("Статья расходов", {}),
         ("Ед. измерения", {}),
         ("Ед. изм.", {}),
-        ("Время начала", dict(keywords=["02:00", "08:00", "09:00"])),
-        ("Время окончания", dict(keywords=["04:00", "17:00", "18:00"])),
+        ("Время начала", dict(keywords=["08:00", "09:00", "02:00"])),
+        ("Время окончания", dict(keywords=["17:00", "18:00", "04:00"])),
     ]
     for _ in range(3):
         modal = find_modal("Добавить позицию") or find_modal("Добавить строку") or find_modal() or modal
         for lbl, kw in specs:
-            if control_by_label(modal, lbl):
-                ctrl = control_by_label(modal, lbl)
-                if ctrl is not None and ctrl_unset(ctrl, lbl):
-                    fill_select(modal, lbl, **kw)
-                    time.sleep(0.6)
-        # Также заполняем любые другие незаполненные селекты в модалке
-        for s in visible_selects(modal):
+            ctrl = control_by_label(modal, lbl)
+            if ctrl is not None and ctrl_unset(ctrl, lbl):
+                fill_select(modal, lbl, **kw)
+                time.sleep(0.5)
+        # Заполняем любые оставшиеся незаполненные ui-select__trigger (строго не трогая date-picker!)
+        try:
+            ui_trgs = [
+                s for s in modal.find_elements(By.XPATH, ".//button[contains(@class,'ui-select__trigger')]")
+                if s.is_displayed() and ctrl_enabled(s) and ctrl_unset(s)
+            ]
+        except Exception:
+            ui_trgs = []
+        for s in ui_trgs:
             try:
-                if ctrl_enabled(s) and ctrl_unset(s):
-                    p = open_ui(s)
-                    if p:
-                        select_in_panel(p, index=0)
-                        close_panels()
-                        time.sleep(0.5)
+                if open_popup(s):
+                    _, opts = wait_options(s, 4)
+                    if opts:
+                        _click_option(opts[0], s)
+                    close_popup(s)
+                    time.sleep(0.4)
             except Exception:
                 continue
-    fill_dates_in(None, start_days=1, length_days=7)
     modal = find_modal("Добавить позицию") or find_modal("Добавить строку") or find_modal() or modal
-    for n_lbl, n_val in [("Количество", "10"), ("Кол-во", "10"), ("Цена без НДС", "10000"), ("План. цена", "10000"), ("Цена", "10000")]:
-        num_field(modal, n_lbl, n_val)
-    # Заполняем любые оставшиеся пустые текстовые/числовые input внутри модалки
+    fill_dates_in(modal, start_days=1, length_days=7)
+    modal = find_modal("Добавить позицию") or find_modal("Добавить строку") or find_modal() or modal
+    for n_lbl, n_val in [
+        ("Количество", "10"),
+        ("Кол-во", "10"),
+        ("Количество техники", "2"),
+        ("Количество единиц", "2"),
+        ("Количество часов", "8"),
+        ("Количество смен", "5"),
+        ("Машино-часы", "8"),
+        ("Цена без НДС", "10000"),
+        ("План. цена", "10000"),
+        ("Цена", "10000"),
+        ("Тариф", "10000"),
+        ("Стоимость", "10000"),
+    ]:
+        num_field(modal, n_lbl, n_val, only_empty=False)
+    # Заполняем любые оставшиеся пустые или нулевые input внутри модалки с учётом их подписи
     try:
+        time_idx = 0
         for inp in modal.find_elements(By.XPATH, ".//input[not(@type='hidden') and not(@type='file') and not(@type='checkbox') and not(@type='radio')]"):
-            if not inp.is_displayed() or not inp.is_enabled():
+            if not inp.is_displayed() or not inp.is_enabled() or inp.get_attribute("readonly"):
+                continue
+            if driver.execute_script("return !!arguments[0].closest('[class*=ui-select__panel]');", inp):
                 continue
             val = (inp.get_attribute("value") or "").strip()
             ph = (inp.get_attribute("placeholder") or "").lower()
             cls = (inp.get_attribute("class") or "").lower()
-            if val or "поиск" in ph or "дд" in ph or "дат" in ph or "date" in cls:
+            if "поиск" in ph:
                 continue
+            f_lbl = (driver.execute_script("""
+                var el = arguments[0], c = el;
+                for (var k = 0; k < 4 && c; k++) {
+                    c = c.parentElement;
+                    if (!c) break;
+                    var lb = c.querySelector('label, [class*=label]');
+                    if (lb && lb.innerText) return lb.innerText.trim();
+                }
+                return '';
+            """, inp) or "").lower()
             itype = (inp.get_attribute("type") or "").lower()
             imode = (inp.get_attribute("inputmode") or "").lower()
-            type_text(inp, "10" if (itype == "number" or imode in ("numeric", "decimal") or "цен" in ph or "кол" in ph or "сумм" in ph) else f"Автотест {STAMP}")
+            is_empty_or_zero = (not val) or val in ("0", "0,00", "0.00", "0,0", "0.0")
+            if not is_empty_or_zero:
+                continue
+            if itype == "time" or "врем" in f_lbl or "чч" in ph or "00:00" in ph:
+                t_str = "09:00" if ("начал" in f_lbl or time_idx == 0) else "18:00"
+                time_idx += 1
+                type_text(inp, t_str)
+            elif "дд" in ph or "дат" in ph or "date" in cls or "дат" in f_lbl:
+                d_target = dtm.date.today() + dtm.timedelta(days=1 if "начал" in f_lbl else 5)
+                type_text(inp, d_target.strftime("%d.%m.%Y"))
+                try:
+                    inp.send_keys(Keys.ENTER)
+                except Exception:
+                    pass
+            elif (itype == "number" or imode in ("numeric", "decimal")
+                  or any(w in (f_lbl + " " + ph) for w in ("цен", "кол", "сумм", "тариф", "час", "смен", "объем", "тонн", "рейс", "стоим"))):
+                type_text(inp, "10000" if any(w in (f_lbl + " " + ph) for w in ("цен", "тариф", "сумм", "стоим")) else "10")
+            else:
+                type_text(inp, f"Автотест {STAMP}")
     except Exception:
         pass
     fill_textarea(modal, f"Автотест позиция заказа техники {STAMP}")
@@ -3228,20 +3321,40 @@ def stage_equip_position():
     except Exception:
         pass
     modal = find_modal("Добавить позицию") or find_modal("Добавить строку") or find_modal() or modal
+    # Закрываем возможный открытый календарь/селект кликом по заголовку модалки (не Escape!)
+    try:
+        hs = [h for h in modal.find_elements(By.XPATH, ".//h2 | .//h3") if h.is_displayed()]
+        if hs:
+            click_el(hs[0])
+            time.sleep(0.3)
+    except Exception:
+        pass
     save = modal_button(modal, ["Добавить", "Сохранить", "Создать"])
     if not save:
         log("  ⚠ Кнопка «Добавить» недоступна (обязательные поля?)", "WARN")
         shot("equip_pos_nobutton")
-        log(f"    Текст окна: {(modal.get_attribute('innerText') or '').replace(chr(10), ' | ')[:300]}")
+        log(f"    Текст окна: {(modal.get_attribute('innerText') or '').replace(chr(10), ' | ')[:400]}")
         close_modal_soft(modal)
         return False
     click_el(save)
     closed = wait_modal_closed("Добавить позицию", 8) and wait_modal_closed("Добавить строку", 4)
     time.sleep(2)
     if not closed:
-        log(f"  ⚠ Окно не закрылось (валидация?). Уведомления: {read_toasts()}", "WARN")
-        shot("equip_pos_validation")
         m = find_modal("Добавить позицию") or find_modal("Добавить строку") or find_modal()
+        modal_errs = []
+        if m:
+            try:
+                modal_errs = driver.execute_script("""
+                    var m = arguments[0];
+                    return Array.from(m.querySelectorAll('[class*=error], [role=alert], [class*=invalid]'))
+                        .filter(e => e.offsetWidth || e.offsetHeight)
+                        .map(e => (e.innerText || '').trim())
+                        .filter(Boolean);
+                """, m) or []
+            except Exception:
+                pass
+        log(f"  ⚠ Окно не закрылось (валидация: {modal_errs}). Уведомления: {read_toasts()}", "WARN")
+        shot("equip_pos_validation")
         if m:
             close_modal_soft(m)
         return False
@@ -3286,7 +3399,7 @@ def run():
         if step("Заявки: создание заявки", stage_supply_create):
             step("Заявки: карточка — вкладки, меню, кнопки", stage_card_tabs)
             step("Заявки: соисполнитель («Поделиться»)", stage_share_coexecutor)
-            step("Заявки: маршрут согласования — Бейсембаев Куаныш", stage_route)
+            step("Заявки: маршрут согласования — Sh Margulan Ju", stage_route)
             step("Заявки: позиции — добавить строку (все поля + файл)", stage_supply_position_1)
             step("Заявки: обсуждение — сообщение и файл", stage_discussion)
             step("Заявки: позиции — ещё одна строка", stage_supply_position_2)
@@ -3307,7 +3420,7 @@ def run():
         # ---------- ТЕХНИКА ----------
         step("Техника: список — фильтры, поиск, открыть заказ", stage_equip_list)
         if step("Техника: создание заказа", stage_equip_create):
-            step("Техника: маршрут согласования — Бейсембаев Куаныш", stage_route)
+            step("Техника: маршрут согласования — Sh Margulan Ju", stage_route)
             step("Техника: обсуждение — сообщение и файл", stage_discussion)
             step("Техника: позиции заказа — добавить строку", stage_equip_position)
             if step("Техника: «На согласование»", stage_send):

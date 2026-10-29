@@ -86,14 +86,22 @@ def _find_row_in_column(tasks_column, task_name: str, row_range=None):
         if _normalize_text(value) == norm_target:
             matches.append(i)
     if not matches:
-        alias_target = (norm_target.replace("ерлан талгатович", "бейсембаев куаныш")
-                                   .replace("талгат ерланович", "алдажаров диас")
-                                   .replace("бейсембаев куаныш", "ерлан талгатович")
-                                   .replace("алдажаров диас", "талгат ерланович"))
-        for i in range(start, min(end, len(tasks_column)) + 1):
-            value = tasks_column[i - 1] if i - 1 < len(tasks_column) else ""
-            if _normalize_text(value) == alias_target:
-                matches.append(i)
+        candidates = [
+            (norm_target.replace("ерлан талгатович", "бейсембаев куаныш")
+                        .replace("талгат ерланович", "алдажаров диас")
+                        .replace("бейсембаев куаныш", "ерлан талгатович")
+                        .replace("алдажаров диас", "талгат ерланович")),
+        ]
+        if "sh margulan ju" in norm_target:
+            for legacy_name in ("бейсембаев куаныш", "ерлан талгатович", "талгат ерланович", "алдажаров диас"):
+                candidates.append(norm_target.replace("sh margulan ju", legacy_name))
+        for cand in candidates:
+            for i in range(start, min(end, len(tasks_column)) + 1):
+                value = tasks_column[i - 1] if i - 1 < len(tasks_column) else ""
+                if _normalize_text(value) == cand:
+                    matches.append(i)
+            if matches:
+                break
     if len(matches) > 1:
         raise ValueError(
             f"Проверка '{task_name}' неоднозначна: строки {matches}. "

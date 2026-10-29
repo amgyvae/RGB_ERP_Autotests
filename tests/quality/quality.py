@@ -120,7 +120,7 @@ PROJECT_QUERY = "Flagman"
 REVIEWER_LOGIN = 'dias.aldazharov@bk.ru'
 REVIEWER_PASS = 'h7WxqKIR'
 
-APPROVER_QUERY = 'Бейсембаев'
+APPROVER_QUERY = 'Margulan'
 PROJECT_KEYS = ["flagman", "флагман", "flag", "флаг"]     # проект: Flagman/Флагман
 PROJECT_SEARCH = ["Flag", "Флаг"]
 CITY_PREFER = ["астан", "нур-султан", "astana"]          # сначала город, где обычно лежит Flagman
@@ -1104,67 +1104,9 @@ def approver_trigger():
     return None
 
 def add_approver():
+    from route_helper import setup_margulan_route
     goto_card()
-    if route_has_approver():
-        log("  ✓ Согласующий уже в маршруте", "PASS")
-        return True
-    trg = approver_trigger()
-    if trg is None:
-        clicked = click_button(["Добавить этап"], wait=5) or \
-            click_text_deepest("Добавить этап", "exact")
-        if not clicked:
-            log("  • 'Добавить этап' не найдено — пробую '+ Этап'")
-            clicked = click_button(["Этап", "+ Этап"], wait=2)
-        log(f"  Нажато 'Добавить этап': {clicked}")
-        for _ in range(16):
-            trg = approver_trigger()
-            if trg:
-                break
-            time.sleep(0.5)
-    if trg is None:
-        # кнопка «Добавить» (согласующего) в шапке этапа
-        try:
-            b = driver.find_element(
-                By.XPATH,
-                "//*[contains(normalize-space(text()),' этап')]"
-                "/following::button[normalize-space(.)='Добавить'][1]")
-            click_el(b)
-            time.sleep(1.5)
-            trg = approver_trigger()
-        except Exception:
-            pass
-    if trg is None:
-        log("  ⚠ Селект 'Выбрать согласующего' не найден", "WARN")
-        return False
-
-    panel = open_ui(trg)
-    if not panel:
-        log("  ⚠ Список согласующих не открылся", "WARN")
-        return False
-    picked = select_in_panel(panel, keywords=["margulan", "маргулан"],
-                             search=APPROVER_QUERY, exclude=["aisinov"])
-    if not picked:
-        log(f"  ⚠ '{APPROVER_QUERY}' не найден в списке", "WARN")
-        close_panels()
-        return False
-    log(f"  ✓ Согласующий выбран: {picked}", "PASS")
-    time.sleep(1.5)
-
-    # на случай старого варианта — модалка «Согласующие»
-    m = find_modal("Согласующ")
-    if m:
-        b = modal_button(m, ["Сохранить", "Добавить", "ОК", "Применить"])
-        if b:
-            click_el(b)
-            wait_modal_closed("Согласующ", 6)
-
-    for _ in range(8):
-        if route_has_approver():
-            log("  ✓ Маршрут согласования настроен", "PASS")
-            return True
-        time.sleep(1)
-    log("  ⚠ Sh Margulan не появился в маршруте", "WARN")
-    return False
+    return setup_margulan_route(driver, log=log)
 
 def try_open_and_cancel(text):
     goto_card()
