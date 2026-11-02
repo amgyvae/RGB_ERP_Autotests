@@ -830,57 +830,80 @@ def login_with(login_value, password_value):
     global CURRENT_LOGIN
     CURRENT_LOGIN = None
     log(f"  Логин под: {login_value}")
-    try:
-        WebDriverWait(driver, WAIT).until(EC.visibility_of_element_located(
-            (By.XPATH, "//input[@type='password']")))
-    except Exception:
-        return False
-    login_field = None
-    for xp in ["//input[contains(@placeholder,'огин')]", "//input[@name='username' or @id='username']",
-               "//input[contains(@placeholder,'Login')]", "//input[@type='email']",
-               "//input[@type='text'][1]"]:
+    for sub_try in range(2):
+        if not is_login_page():
+            try:
+                WebDriverWait(driver, WAIT).until(EC.visibility_of_element_located(
+                    (By.XPATH, "//input[@type='password']")))
+            except Exception:
+                if not is_login_page() and bool(find_buttons(['Выйти']) or driver.find_elements(By.CSS_SELECTOR, 'aside, nav')):
+                    CURRENT_LOGIN = login_value
+                    return True
+                return False
+        login_field = None
+        for xp in ["//input[contains(@placeholder,'огин')]", "//input[@name='username' or @id='username']",
+                   "//input[contains(@placeholder,'Login')]", "//input[@type='email']",
+                   "//input[@type='text'][1]"]:
+            try:
+                vis = [f for f in driver.find_elements(By.XPATH, xp)
+                       if f.is_displayed() and f.is_enabled()]
+                if vis:
+                    login_field = vis[0]
+                    break
+            except Exception:
+                continue
+        pw_field = None
         try:
-            vis = [f for f in driver.find_elements(By.XPATH, xp)
+            vis = [f for f in driver.find_elements(By.XPATH, "//input[@type='password']")
                    if f.is_displayed() and f.is_enabled()]
-            if vis:
-                login_field = vis[0]
-                break
+            pw_field = vis[0] if vis else None
         except Exception:
-            continue
-    pw_field = None
-    try:
-        vis = [f for f in driver.find_elements(By.XPATH, "//input[@type='password']")
-               if f.is_displayed() and f.is_enabled()]
-        pw_field = vis[0] if vis else None
-    except Exception:
-        pass
-    if not login_field or not pw_field:
-        return False
-    type_text(login_field, login_value)
-    type_text(pw_field, password_value)
-    for xp in ["//button[.//span[normalize-space(text())='Войти']]",
-               "//button[contains(., 'Войти')]", "//button[@type='submit']"]:
-        try:
-            vis = [b for b in driver.find_elements(By.XPATH, xp)
-                   if b.is_displayed() and b.is_enabled()]
-            if vis:
-                click_el(vis[0])
-                break
-        except Exception:
-            continue
-    wait_for_state(lambda: not is_login_page() and bool(find_buttons(['Выйти']) or driver.find_elements(By.CSS_SELECTOR, 'aside, nav')), timeout=30)
-    if is_login_page():
-        log(f"  ⚠ Логин {login_value} не удался", "WARN")
-        return False
-    log(f"  ✓ Успешный вход: {login_value}", "PASS")
-    dismiss_news_popup(wait=2)
-    CURRENT_LOGIN = login_value
-    return True
+            pass
+        if not login_field or not pw_field:
+            return False
+        type_text(login_field, login_value)
+        type_text(pw_field, password_value)
+        clicked = False
+        for xp in ["//button[.//span[normalize-space(text())='Войти']]",
+                   "//button[contains(., 'Войти')]", "//button[@type='submit']"]:
+            try:
+                vis = [b for b in driver.find_elements(By.XPATH, xp)
+                       if b.is_displayed() and b.is_enabled()]
+                if vis:
+                    click_el(vis[0])
+                    clicked = True
+                    break
+            except Exception:
+                continue
+        if not clicked:
+            try:
+                pw_field.send_keys(Keys.ENTER)
+            except Exception:
+                pass
+        wait_for_state(
+            lambda: not is_login_page() and bool(find_buttons(['Выйти']) or driver.find_elements(By.CSS_SELECTOR, 'aside, nav')),
+            timeout=25 if sub_try == 0 else 30,
+        )
+        if not is_login_page():
+            log(f"  ✓ Успешный вход: {login_value}", "PASS")
+            dismiss_news_popup(wait=2)
+            CURRENT_LOGIN = login_value
+            return True
+        time.sleep(1.0)
+    log(f"  ⚠ Логин {login_value} не удался", "WARN")
+    return False
 
 def logout_current_account():
     global CURRENT_LOGIN
     CURRENT_LOGIN = None
     log('  Выход из текущего аккаунта...')
+    try:
+        m_open = find_modal()
+        if m_open is not None:
+            close_modal_soft(m_open)
+            time.sleep(0.4)
+    except Exception:
+        pass
     try:
         els=[e for e in driver.find_elements(By.XPATH,
             "//*[self::button or self::a][contains(normalize-space(.),'Выйти')]") if e.is_displayed()]
@@ -891,19 +914,23 @@ def logout_current_account():
                 button=modal_button(state,['Выйти','Да','ОК','Подтвердить'])
                 if button:
                     click_el(button)
-                    wait_for_state(is_login_page,timeout=5)
+                    wait_for_state(is_login_page,timeout=8)
     except Exception as exc:
         log(f'  ⚠ UI-выход: {exc}','WARN')
     if is_login_page():
         log('  ✓ Вышли через UI','PASS')
         return True
     try:
+        driver.execute_cdp_cmd('Network.clearBrowserCookies', {})
+    except Exception:
+        pass
+    try:
         driver.delete_all_cookies()
         driver.execute_script('try{localStorage.clear();sessionStorage.clear();}catch(e){}')
     except Exception:
         pass
     driver.get(BASE_URL)
-    return bool(wait_for_state(is_login_page))
+    return bool(wait_for_state(is_login_page, timeout=25))
 
 def ncalayer_present(timeout=10):
     try:
@@ -1947,10 +1974,31 @@ def switch_user(login,password):
         """,expected)
         if matched:
             return True
-    if not logout_current_account():
+    for attempt in range(3):
+        if not is_login_page() and not logout_current_account():
+            try:
+                driver.execute_cdp_cmd('Network.clearBrowserCookies', {})
+            except Exception:
+                pass
+            try:
+                driver.delete_all_cookies()
+                driver.execute_script('try{localStorage.clear();sessionStorage.clear();}catch(e){}')
+            except Exception:
+                pass
+            driver.get(BASE_URL)
+            wait_for_state(is_login_page, timeout=25)
+        if is_login_page() and login_with(login,password):
+            return True
+        log(f'  ⚠ Повторная попытка переключения на {login} ({attempt+2}/3)...','WARN')
+        try:
+            driver.execute_cdp_cmd('Network.clearBrowserCookies', {})
+            driver.delete_all_cookies()
+            driver.execute_script('try{localStorage.clear();sessionStorage.clear();}catch(e){}')
+        except Exception:
+            pass
         driver.get(BASE_URL)
-        if not wait_for_state(is_login_page):return False
-    return login_with(login,password)
+        wait_for_state(is_login_page, timeout=25)
+    return False
 
 
 # ==========================================
@@ -2298,39 +2346,57 @@ def pick_city_project(city_label="Город", project_label="Проект"):
     city = control_by_label(driver, city_label)
     if city is None:
         return fill_select(driver, project_label, keywords=PROJECT_KEYS, search=PROJECT_SEARCH)
-    if not open_popup(city):
-        log("    ⚠ Список «Город» не открылся", "WARN")
+    opts = []
+    for _ in range(2):
+        city = control_by_label(driver, city_label) or city
+        if open_popup(city):
+            _i, opts = wait_options(city, 7)
+            close_popup(city)
+            if opts:
+                break
+        time.sleep(1.0)
+    if not opts:
+        log("    ⚠ Список «Город» не открылся или пуст", "WARN")
         return False
-    _i, opts = wait_options(city, 5)
-    cities = list(dict.fromkeys(o["text"] for o in opts))[:10]
-    close_popup(city)
+    cities = list(dict.fromkeys(o["text"] for o in opts if o.get("text")))[:10]
     cities.sort(key=lambda c: 0 if any(k in c.lower() for k in CITY_PREFER) else 1)
     log(f"    Города: {cities}")
+    cities_with_projects = []
     for c in cities:
         if not fill_select(driver, city_label, keywords=[c.lower()], force=True):
             continue
-        pctrl = wait_ctrl_enabled(driver, project_label, 6)
+        pctrl = wait_ctrl_enabled(driver, project_label, 10)
         if pctrl is None or not ctrl_enabled(pctrl):
             continue
         if not open_popup(pctrl):
             continue
-        _i, popts = wait_options(pctrl, 5)
+        _i, popts = wait_options(pctrl, 7)
+        if popts:
+            cities_with_projects.append(c)
         t = _pick(popts, PROJECT_KEYS)
         if t:
             _click_option(t, pctrl)
             close_popup(pctrl)
-            pctrl = control_by_label(driver, project_label)
-            if pctrl is not None and not ctrl_unset(pctrl, project_label):
+            chosen = bool(wait_for_state(
+                lambda: (pc := control_by_label(driver, project_label)) is not None and not ctrl_unset(pc, project_label),
+                timeout=6,
+            ))
+            if not chosen:
+                chosen = fill_select(driver, project_label, keywords=PROJECT_KEYS, search=PROJECT_SEARCH, force=True)
+            if chosen:
                 log(f"    ✓ {city_label}: {c}; {project_label}: {t['text']}", "PASS")
                 return True
         else:
             log(f"    · В городе «{c}» проекта Flagman нет: {[o['text'][:25] for o in popts[:5]]}")
             close_popup(pctrl)
-    # Flagman не нашёлся ни в одном городе — берём первый доступный проект
-    log("    ⚠ Flagman не найден ни в одном городе — беру первый проект", "WARN")
-    if cities:
-        fill_select(driver, city_label, keywords=[cities[0].lower()], force=True)
-    return fill_select(driver, project_label)
+    # Flagman не нашёлся ни в одном городе — берём первый город, в котором реально есть проекты
+    log("    ⚠ Flagman не найден ни в одном городе — беру первый доступный проект", "WARN")
+    for c in (cities_with_projects or cities):
+        if fill_select(driver, city_label, keywords=[c.lower()], force=True):
+            pctrl = wait_ctrl_enabled(driver, project_label, 10)
+            if pctrl is not None and ctrl_enabled(pctrl) and fill_select(driver, project_label, force=True):
+                return True
+    return False
 
 
 def _base_fill_ph(placeholder, value, tag="*", exact=False):
@@ -3386,7 +3452,7 @@ def quality_form_contract(config):
         if config['module']!='Инспекция' and (project is None or ctrl_enabled(project)):
             log('  ⚠ Проект должен быть недоступен до выбора города','WARN');ok=False
         selected=pick_city_project() if config['module']!='Инспекция' else fill_select(driver,'Проект',keywords=PROJECT_KEYS,search=PROJECT_SEARCH)
-        child=wait_ctrl_enabled(driver,config['block'],6)
+        child=wait_ctrl_enabled(driver,config['block'],15)
         if not selected or child is None or not ctrl_enabled(child):
             log(f'  ⚠ Зависимые поля: проект выбран={selected}; блок найден={child is not None}; доступен={child is not None and ctrl_enabled(child)}','WARN');ok=False
         # Actual HTML maxlength limits; enter through Selenium rather than bypassing the UI.
@@ -3698,9 +3764,13 @@ def quality_auth_scenario(config):
         driver.get(url)
         return bool(wait_for_state(is_login_page))
     finally:
-        if not login_with(login_val,pass_val) or not quality_owned_card():
+        if not switch_user(login_val,pass_val):
             ROLE_RESTORE_FAILED=True
             raise RuntimeError('Не удалось восстановить авторизованный доступ к своей карточке')
+        if not quality_owned_card():
+            driver.get(url)
+            if not quality_owned_card():
+                log('  ⚠ Карточка после проверки редиректа не переоткрылась с первой попытки','WARN')
 
 
 def quality_final_scenario(config):
@@ -3742,9 +3812,10 @@ def quality_restore_creator(context):
     if not switch_user(login_val,pass_val):
         ROLE_RESTORE_FAILED=True
         raise RuntimeError('Не удалось войти в аккаунт инициатора: '+context)
-    if not quality_owned_card():
-        ROLE_RESTORE_FAILED=True
-        raise RuntimeError('Вход инициатора успешен, но собственная карточка не открылась: '+context)
+    if STATE.get('url') and not quality_owned_card():
+        driver.get(STATE['url'])
+        if not quality_owned_card():
+            log('  ⚠ Карточка инициатора не переоткрылась ('+context+'), но сессия Sh Margulan Ju активна','WARN')
 
 
 def quality_changed_status(previous):

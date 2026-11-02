@@ -1,10 +1,22 @@
 name: Daily ERP Autotests (08:00 Almaty)
 
 on:
-  # Ежедневный запуск к 08:00 утра по времени Алматы (UTC+5).
-  # GitHub Actions интерпретирует cron строго в UTC: 02:45 UTC = 07:45 Алматы
-  # (с учётом стандартной очереди GitHub Actions 10–15 мин фактический старт в ~08:00 Алматы).
+  # Ежедневный утренний запуск в 07:00–08:00 по времени Алматы (UTC+5).
+  # На бесплатных раннерах GitHub Actions очередь schedule может задерживаться от 0 до 7 часов
+  # (из-за чего одиночный cron 02:45 UTC фактически стартовал в 13:50–14:45 Алматы).
+  # Каскад триггеров покрывает задержки очереди от 0 до 7.5 ч, а шаг «gate» пропускает
+  # РОВНО ОДИН запуск в сутки строго в утреннем окне Алматы (06:40–10:15 UTC+5)
+  # и мгновенно отсекает ночные/послеобеденные срабатывания без уведомлений в Telegram.
   schedule:
+    - cron: "30 19 * * *"
+    - cron: "15 20 * * *"
+    - cron: "0 21 * * *"
+    - cron: "45 21 * * *"
+    - cron: "30 22 * * *"
+    - cron: "30 23 * * *"
+    - cron: "30 0 * * *"
+    - cron: "15 1 * * *"
+    - cron: "0 2 * * *"
     - cron: "45 2 * * *"
   # Поддержка точного внешнего вебхука (например cron-job.org) при необходимости
   repository_dispatch:
@@ -29,6 +41,7 @@ concurrency:
 
 permissions:
   contents: read
+  actions: read
 
 env:
   TZ: Asia/Almaty
@@ -40,22 +53,122 @@ jobs:
     name: Планирование прогона
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.matrix.outputs.matrix }}
-      modules: ${{ steps.matrix.outputs.modules }}
-      web_only: ${{ steps.matrix.outputs.web_only }}
+      should_run: ${{ steps.gate.outputs.should_run }}
+      matrix: ${{ steps.matrix.outputs.matrix || steps.gate.outputs.matrix }}
+      modules: ${{ steps.matrix.outputs.modules || steps.gate.outputs.modules }}
+      web_only: ${{ steps.matrix.outputs.web_only || steps.gate.outputs.web_only }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Проверка утреннего окна Алматы (07:00–10:15) и защита от дублей
+        id: gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          CURRENT_RUN_ID: ${{ github.run_id }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.request
+          from datetime import datetime, timedelta, timezone
 
-      - uses: actions/setup-python@v5
+          almaty_tz = timezone(timedelta(hours=5))
+          now_alm = datetime.now(almaty_tz)
+          event = os.environ.get("EVENT_NAME", "")
+          repo = os.environ.get("REPO", "")
+          cur_id = str(os.environ.get("CURRENT_RUN_ID", ""))
+          token = os.environ.get("GH_TOKEN", "")
+          out_path = os.environ["GITHUB_OUTPUT"]
+          summary_path = os.environ.get("GITHUB_STEP_SUMMARY", "")
+
+          def finish(should_run: bool, reason: str):
+              print(f"[GATE] {now_alm.strftime('%Y-%m-%d %H:%M:%S')} Almaty | event={event} | should_run={should_run} | {reason}")
+              with open(out_path, "a", encoding="utf-8") as f:
+                  f.write(f"should_run={'true' if should_run else 'false'}\n")
+                  if not should_run:
+                      f.write('matrix={"include":[]}\n')
+                      f.write("modules=none\n")
+                      f.write("web_only=true\n")
+              if summary_path:
+                  with open(summary_path, "a", encoding="utf-8") as sf:
+                      sf.write(f"### Утренний фильтр запуска\n- Время Алматы: `{now_alm.strftime('%d.%m.%Y %H:%M:%S')} (UTC+5)`\n- Решение: `{'ЗАПУСК' if should_run else 'ПРОПУСК'}` — {reason}\n")
+
+          if event != "schedule":
+              finish(True, f"Ручной/внешний запуск ({event})")
+              raise SystemExit(0)
+
+          mins = now_alm.hour * 60 + now_alm.minute
+          # Утреннее окно Алматы: с 06:40 до 10:15 (07:00–08:00 целевой старт + запас).
+          # Все ночные и послеобеденные (13:00–15:00) запоздавшие cron-срабатывания отсекаются.
+          if not (6 * 60 + 40 <= mins <= 10 * 60 + 15):
+              finish(False, f"Вне утреннего окна 06:40–10:15 Алматы (сейчас {now_alm.strftime('%H:%M')})")
+              raise SystemExit(0)
+
+          def gh_get(url: str):
+              req = urllib.request.Request(url, headers={
+                  "Authorization": f"Bearer {token}",
+                  "Accept": "application/vnd.github+json",
+                  "User-Agent": "rgb-erp-morning-gate",
+              })
+              with urllib.request.urlopen(req, timeout=20) as resp:
+                  return json.loads(resp.read().decode("utf-8"))
+
+          def parse_alm(ts: str):
+              if not ts:
+                  return None
+              return datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone(almaty_tz)
+
+          if repo and token:
+              try:
+                  runs_url = f"https://api.github.com/repos/{repo}/actions/workflows/morning-autotests.yml/runs?event=schedule&per_page=30"
+                  runs = gh_get(runs_url).get("workflow_runs", [])
+                  for r in runs:
+                      rid = str(r.get("id", ""))
+                      if not rid or rid == cur_id:
+                          continue
+                      started_alm = parse_alm(r.get("run_started_at") or r.get("created_at"))
+                      if not started_alm or started_alm.date() != now_alm.date():
+                          continue
+                      jobs_data = gh_get(f"https://api.github.com/repos/{repo}/actions/runs/{rid}/jobs?per_page=50")
+                      for job in jobs_data.get("jobs", []):
+                          jname = job.get("name", "")
+                          jstatus = job.get("status", "")
+                          jconc = job.get("conclusion")
+                          if jname == "Планирование прогона":
+                              for st in job.get("steps", []):
+                                  if "Список модулей" in st.get("name", "") and (
+                                      st.get("conclusion") == "success" or st.get("status") == "in_progress"
+                                  ):
+                                      finish(False, f"Утренний прогон сегодня уже запущен/выполнен (run #{r.get('run_number')}, id={rid})")
+                                      raise SystemExit(0)
+                          else:
+                              if jstatus in ("in_progress", "queued") or jconc not in (None, "skipped", "cancelled"):
+                                  finish(False, f"Утренний прогон сегодня уже выполняется/выполнен (run #{r.get('run_number')}, id={rid})")
+                                  raise SystemExit(0)
+              except SystemExit:
+                  raise
+              except Exception as exc:
+                  print(f"[GATE] Предупреждение при проверке истории запусков: {exc}")
+
+          finish(True, "Первый утренний запуск за сегодня в окне 06:40–10:15 Алматы")
+          PY
+
+      - if: steps.gate.outputs.should_run == 'true'
+        uses: actions/checkout@v4
+
+      - if: steps.gate.outputs.should_run == 'true'
+        uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
 
       - name: Установка зависимостей для уведомлений
+        if: steps.gate.outputs.should_run == 'true'
         run: python -m pip install requests gspread google-auth openpyxl
 
       - name: Список модулей и уведомление о старте в Telegram
         id: matrix
+        if: steps.gate.outputs.should_run == 'true'
         env:
           MODULES: ${{ inputs.modules || vars.AUTOTEST_MODULES || 'all' }}
           # На облачном Ubuntu нет NCALayer — такие модули пропускаются,
@@ -80,7 +193,7 @@ jobs:
   test:
     name: ${{ matrix.title }}
     needs: plan
-    if: ${{ fromJSON(needs.plan.outputs.matrix).include[0] }}
+    if: ${{ needs.plan.outputs.should_run == 'true' && fromJSON(needs.plan.outputs.matrix).include[0] }}
     # ubuntu-latest — облако GitHub; self-hosted — ваш Windows-ПК с NCALayer
     # (задаётся переменной репозитория AUTOTEST_RUNNER).
     runs-on: ${{ vars.AUTOTEST_RUNNER || 'ubuntu-latest' }}
@@ -137,7 +250,7 @@ jobs:
   summary:
     name: Итоговый отчёт в Telegram
     needs: [plan, test]
-    if: always()
+    if: ${{ always() && needs.plan.outputs.should_run == 'true' }}
     runs-on: ubuntu-latest
     env:
       TG_ENABLED: ${{ vars.TG_ENABLED || '1' }}
@@ -169,3 +282,4 @@ jobs:
           FLAGS=""
           if [ "$WEB_ONLY" = "true" ]; then FLAGS="--web-only"; fi
           python run_all.py --notify-summary "$MODULES" $FLAGS
+

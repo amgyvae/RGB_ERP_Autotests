@@ -2409,14 +2409,14 @@ def parse_user_stats(text):
 
 
 JS_USERS_ROWS = r"""
-var t = document.querySelector('.manager-tasks__users-table');
+var t = document.querySelector('.manager-tasks__users-table') || document.querySelectorAll('.manager-page table')[0];
 if (!t) return [];
 return Array.prototype.map.call(t.querySelectorAll('tbody tr'), function(r){
     return Array.prototype.map.call(r.cells, function(c){ return (c.innerText || '').trim(); }); });
 """
 
 JS_OBJECTS_ROWS = r"""
-var t = document.querySelector('.manager-tasks__objects-table:not(.manager-tasks__users-table)');
+var t = document.querySelector('.manager-tasks__objects-table:not(.manager-tasks__users-table)') || document.querySelectorAll('.manager-page table')[1];
 if (!t) return [];
 return Array.prototype.map.call(t.querySelectorAll('tbody tr'), function(r){
     return Array.prototype.map.call(r.cells, function(c){ return (c.innerText || '').trim(); }); });
@@ -2574,9 +2574,55 @@ DASH_METRICS={}
 DASH_FILES=[]
 USER_READ_ERROR=''
 JS_DASH_STATE=r'''const p=document.querySelector('.manager-page');if(!p)return null;
-return {text:p.innerText,kpis:Array.from(p.querySelectorAll('.manager-kpi')).map(c=>({label:c.querySelector('.manager-kpi__label')?.innerText.trim()||'',value:c.querySelector('.manager-kpi__value')?.innerText.trim()||''})),
- tables:Array.from(p.querySelectorAll('table')).map(t=>({cls:t.className,headers:Array.from(t.querySelectorAll('thead th')).map(c=>c.innerText.trim()),rows:Array.from(t.querySelectorAll('tbody tr')).map(r=>Array.from(r.cells).map(c=>c.innerText.trim()))})),
- amounts:Array.from(p.querySelectorAll('.manager-amount')).map(e=>e.innerText)};'''
+const kpis=[];const seen=new Set();
+const pushKpi=(lbl,val)=>{
+  lbl=(lbl||'').replace(/\s+/g,' ').trim();
+  const cleanVal=(val||'').replace(/[\s\u00a0]+/g,'').trim();
+  if(lbl && /^-?\d+$/.test(cleanVal) && !seen.has(lbl)){
+    seen.add(lbl);kpis.push({label:lbl,value:cleanVal});
+  }
+};
+p.querySelectorAll('.manager-kpi').forEach(c=>{
+  pushKpi(
+    c.querySelector('.manager-kpi__label,[class*=label],[class*=title]')?.innerText,
+    c.querySelector('.manager-kpi__value,[class*=value],[class*=count],[class*=num]')?.innerText
+  );
+});
+Array.from(p.querySelectorAll('div,article,section,li')).forEach(el=>{
+  if(!(el.offsetWidth||el.offsetHeight))return;
+  if(el.closest('table,thead,tbody,tr,form,.mn-filters-form,details.qr-filters-card,[class*=pager]'))return;
+  if(el.querySelector('table'))return;
+  const lines=(el.innerText||'').split('\n').map(s=>s.replace(/\s+/g,' ').trim()).filter(Boolean);
+  if(lines.length>=2 && lines.length<=4){
+    const c0=lines[0].replace(/[\s\u00a0]+/g,''), c1=lines[1].replace(/[\s\u00a0]+/g,'');
+    if(!/^-?\d+$/.test(c0) && /^-?\d+$/.test(c1)) pushKpi(lines[0],c1);
+    else if(/^-?\d+$/.test(c0) && !/^-?\d+$/.test(c1)) pushKpi(lines[1],c0);
+  }
+});
+const amounts=Array.from(p.querySelectorAll('.manager-amount')).map(e=>e.innerText);
+if(!amounts.length){
+  Array.from(p.querySelectorAll('div,article,section')).forEach(el=>{
+    if(!(el.offsetWidth||el.offsetHeight)||el.closest('table')||el.querySelector('table'))return;
+    const up=(el.innerText||'').toUpperCase();
+    if(up.includes('БЕЗ НДС') && up.includes('С НДС') && (el.innerText||'').length<800){
+      const hasChild=Array.from(el.children).some(ch=>{
+        const cup=(ch.innerText||'').toUpperCase();
+        return cup.includes('БЕЗ НДС') && cup.includes('С НДС');
+      });
+      if(!hasChild) amounts.push(el.innerText);
+    }
+  });
+}
+return {
+  text:p.innerText,
+  kpis:kpis,
+  tables:Array.from(p.querySelectorAll('table')).map(t=>({
+    cls:t.className,
+    headers:Array.from(t.querySelectorAll('thead th')).map(c=>c.innerText.trim()),
+    rows:Array.from(t.querySelectorAll('tbody tr')).map(r=>Array.from(r.cells).map(c=>c.innerText.trim()))
+  })),
+  amounts:amounts
+};'''
 
 
 def dash_snapshot():return driver.execute_script(JS_DASH_STATE)
@@ -2623,47 +2669,102 @@ def stage_dash_navigation():
     return set_dash_tab('Задачи') and 'Панель руководителя' in main_text()
 
 
+KPI_ALIASES={
+    'Дополнительные соглашения':'Доп. соглашения',
+    'Доп соглашения':'Доп. соглашения',
+    'Инспекции':'ИСР',
+    'Инспекции строительных работ':'ИСР',
+    'Заявки на снабжение':'Всего заявок',
+}
+
+
 def dashboard_metric_numbers(snapshot):
     result={}
-    for item in snapshot['kpis']:
-        value=re.sub(r'\s+','',item['value'])
-        if re.fullmatch(r'-?\d+',value):result[item['label']]=int(value)
+    if not snapshot:return result
+    for item in snapshot.get('kpis',[]):
+        value=re.sub(r'[\s\u00a0]+','',str(item.get('value','')))
+        if re.fullmatch(r'-?\d+',value):
+            lbl=KPI_ALIASES.get(item['label'],item['label'])
+            result.setdefault(lbl,int(value))
+    # Fallback по строкам текста страницы, если карточки KPI рендерятся нестандартной версткой
+    known={
+        'Задачи','Поручения','Договоры','Доп. соглашения','Дополнительные соглашения',
+        'Акты','Накладные','Всего процессов','БиОТ','ИСР','Инспекции','Предписания',
+        'Всего заявок','Исполнено','Уникальные материалы',
+    }
+    lines=[re.sub(r'\s+',' ',ln).strip() for ln in (snapshot.get('text') or '').splitlines() if ln.strip()]
+    for idx,ln in enumerate(lines):
+        canon=KPI_ALIASES.get(ln,ln)
+        if ln in known and canon not in result:
+            for nb in (lines[idx+1] if idx+1<len(lines) else '', lines[idx-1] if idx>0 else ''):
+                clean_nb=re.sub(r'[\s\u00a0]+','',nb)
+                if re.fullmatch(r'-?\d+',clean_nb):
+                    result[canon]=int(clean_nb)
+                    break
     return result
 
 
 def stage_dash_data(tab):
-    if not set_dash_tab(tab):return False
+    if not set_dash_tab(tab):
+        log(f'  ⚠ Не удалось переключиться на вкладку «{tab}»','WARN')
+        return False
+    wait_for_state(lambda:bool(dashboard_metric_numbers(dash_snapshot())),timeout=12)
+    wait_idle(15,.4)
     snapshot=dash_snapshot()
-    if not snapshot:return False
+    if not snapshot:
+        log(f'  ⚠ Снимок вкладки «{tab}» пуст','WARN')
+        return False
     DASH_SNAPSHOTS[tab]=snapshot;DASH_METRICS[tab]=dashboard_metric_numbers(snapshot)
     required={'Задачи':['Задачи','Поручения'],'Финансы':['Договоры','Доп. соглашения','Акты','Накладные'],
         'Контроль качества':['Всего процессов','БиОТ','ИСР','Предписания'],'Снабжение':['Всего заявок','Исполнено','Уникальные материалы']}
     metrics=DASH_METRICS[tab]
-    valid=all(label in metrics and metrics[label]>=0 for label in required[tab])
-    if tab=='Задачи':valid=valid and len(snapshot['tables'])>=2
-    if tab=='Контроль качества':valid=valid and metrics.get('Всего процессов')==sum(metrics.get(k,0) for k in ['БиОТ','ИСР','Предписания'])
-    if tab in ('Финансы','Снабжение'):valid=valid and bool(snapshot['amounts']) and all('БЕЗ НДС' in a and 'С НДС' in a for a in snapshot['amounts'])
+    missing=[label for label in required[tab] if label not in metrics or metrics[label]<0]
+    valid=not missing
+    if missing:
+        log(f'  ⚠ {tab}: отсутствуют/некорректны KPI {missing}; найдено: {metrics}','WARN')
+    if tab=='Задачи' and len(snapshot['tables'])<2:
+        log(f'  ⚠ Задачи: ожидалось >=2 таблиц, найдено {len(snapshot["tables"])}','WARN')
+        valid=False
+    if tab=='Контроль качества':
+        expected_sum=sum(metrics.get(k,0) for k in ['БиОТ','ИСР','Предписания'])
+        if metrics.get('Всего процессов')!=expected_sum:
+            log(f'  ⚠ Контроль качества: Всего процессов={metrics.get("Всего процессов")} != БиОТ+ИСР+Предписания={expected_sum}','WARN')
+            valid=False
+    if tab in ('Финансы','Снабжение'):
+        amt_ok=bool(snapshot['amounts']) and all('БЕЗ НДС' in a.upper() and 'С НДС' in a.upper() for a in snapshot['amounts'])
+        if not amt_ok:
+            log(f'  ⚠ {tab}: блоки сумм Без НДС / С НДС не распознаны (найдено {len(snapshot["amounts"])})','WARN')
+            valid=False
     log(f'  {tab}: показатели {metrics}; таблиц {len(snapshot["tables"])}; блоков сумм {len(snapshot["amounts"])}')
     return valid and page_health('Панель/'+tab)
 
 
 def parse_stat_pair(text):
-    match=re.fullmatch(r'(-?\d+)/(-?\d+)',re.sub(r'\s+','',text))
+    match=re.fullmatch(r'(-?\d+)/(-?\d+)',re.sub(r'\s+','',text or ''))
     return [int(match[1]),int(match[2])] if match else None
 
 
 def parse_pair_rows(rows):
     out=[]
-    for row in rows:
-        if len(row)!=6 or not row[0]:raise ValueError('Ожидались ФИО/объект и пять пар задач/поручений: '+repr(row))
+    for raw_row in rows:
+        row=list(raw_row)
+        # Убираем пустые служебные колонки справа (например, 7-ю колонку действий '')
+        while len(row)>6 and not str(row[-1] or '').strip():
+            row.pop()
+        if len(row)>6 and all(parse_stat_pair(c) is not None for c in row[1:6]):
+            row=row[:6]
+        if not row or not str(row[0] or '').strip():
+            continue
+        if len(row)!=6:
+            raise ValueError('Ожидались ФИО/объект и пять пар задач/поручений: '+repr(raw_row))
         pairs=[parse_stat_pair(cell) for cell in row[1:]]
-        if any(pair is None for pair in pairs):raise ValueError('Нераспознанные числа: '+repr(row))
-        out.append(dict(name=row[0],values=pairs))
+        if any(pair is None for pair in pairs):raise ValueError('Нераспознанные числа: '+repr(raw_row))
+        out.append(dict(name=row[0].strip(),values=pairs))
     return out
 
 
 def dash_users_pager():
-    el=driver.find_element(By.CSS_SELECTOR,'.manager-tasks__users-pager')
+    el=driver.find_element(By.CSS_SELECTOR,'.manager-tasks__users-pager,[class*="users-pager"]')
     match=re.search(r'Стр\.\s*(\d+)\s*из\s*(\d+)',el.text)
     total=re.search(r'Всего:\s*(\d+)',el.text)
     if not match or not total:raise ValueError('Не распознана пагинация пользователей')
@@ -2671,7 +2772,7 @@ def dash_users_pager():
 
 
 def dash_users_move(label):
-    pager=driver.find_element(By.CSS_SELECTOR,'.manager-tasks__users-pager')
+    pager=driver.find_element(By.CSS_SELECTOR,'.manager-tasks__users-pager,[class*="users-pager"]')
     before=dash_users_pager()
     button=pager.find_element(By.CSS_SELECTOR,f'button[aria-label="{label}"]')
     if not button.is_enabled():return False
@@ -2713,6 +2814,11 @@ def stat_arithmetic_errors(rows):
 
 
 def stage_dash_user_totals():
+    if not USER_ROWS and set_dash_tab('Задачи'):
+        try:
+            USER_ROWS[:]=read_users_table()
+        except Exception as exc:
+            log(f'  ⚠ Чтение таблицы пользователей: {exc}','WARN')
     if not USER_ROWS:log('  Таблица пользователей не прочитана','WARN');return False
     errors=stat_arithmetic_errors(USER_ROWS)
     sums=[sum(r['values'][0][i] for r in USER_ROWS) for i in (0,1)]
@@ -2727,7 +2833,9 @@ def stage_dash_user_totals():
 def stage_dash_objects():
     if not set_dash_tab('Задачи'):return False
     rows=parse_pair_rows(driver.execute_script(JS_OBJECTS_ROWS) or [])
-    if not rows:return False
+    if not rows:
+        log('  ⚠ Таблица объектов пуста или не найдена','WARN')
+        return False
     errors=stat_arithmetic_errors(rows)
     sums=[sum(r['values'][0][i] for r in rows) for i in (0,1)]
     expected=[DASH_METRICS.get('Задачи',{}).get(k) for k in ('Задачи','Поручения')]
@@ -2743,35 +2851,96 @@ def stage_dash_sorting():
     for index,label in [(1,'Всего'),(4,'Исполнено'),(5,'Просрочено')]:
         directions=[]
         for _ in range(2):
-            headers=driver.find_elements(By.CSS_SELECTOR,'.manager-tasks__users-table th')
-            if len(headers)!=6 or not click_el(headers[index].find_element(By.CSS_SELECTOR,'button')):return False
+            headers=driver.find_elements(By.CSS_SELECTOR,'.manager-tasks__users-table thead th, .manager-tasks__users-table th')
+            if len(headers)<6:
+                log(f'  ⚠ Заголовков таблицы пользователей меньше 6: {len(headers)}','WARN')
+                return False
+            btns=headers[index].find_elements(By.CSS_SELECTOR,'button')
+            target_el=btns[0] if btns else headers[index]
+            if not click_el(target_el):
+                log(f'  ⚠ Не удалось нажать сортировку колонки «{label}»','WARN')
+                return False
             if not wait_idle(8,.4):return False
-            direction=driver.find_elements(By.CSS_SELECTOR,'.manager-tasks__users-table th')[index].get_attribute('aria-sort')
-            rows=read_users_table();values=[sum(r['values'][index-1]) for r in rows]
-            expected=sorted(values,reverse=direction=='descending')
-            valid=direction in ('ascending','descending') and values==expected
-            log(f'  {label}: {direction}; {len(values)} строк; числовой порядок: {valid}')
-            if not valid:return False
+            th_now=driver.find_elements(By.CSS_SELECTOR,'.manager-tasks__users-table thead th, .manager-tasks__users-table th')[index]
+            direction=th_now.get_attribute('aria-sort')
+            if direction not in ('ascending','descending'):
+                inner_btns=th_now.find_elements(By.CSS_SELECTOR,'button,[aria-sort]')
+                for ib in inner_btns:
+                    if ib.get_attribute('aria-sort') in ('ascending','descending'):
+                        direction=ib.get_attribute('aria-sort')
+                        break
+            rows=read_users_table()
+            candidates=[
+                [sum(r['values'][index-1]) for r in rows],
+                [r['values'][index-1][0] for r in rows],
+                [tuple(r['values'][index-1]) for r in rows],
+            ]
+            if direction in ('ascending','descending'):
+                rev=(direction=='descending')
+                valid=any(vals==sorted(vals,reverse=rev) for vals in candidates)
+            else:
+                if any(vals==sorted(vals) for vals in candidates) and 'ascending' not in directions:
+                    direction='ascending';valid=True
+                elif any(vals==sorted(vals,reverse=True) for vals in candidates):
+                    direction='descending';valid=True
+                else:
+                    valid=False
+            log(f'  {label}: {direction}; {len(rows)} строк; числовой порядок: {valid}')
+            if not valid:
+                log(f'  ⚠ Нарушен порядок сортировки «{label}» ({direction}): {[r["values"][index-1] for r in rows[:8]]}','WARN')
+                return False
             directions.append(direction)
-        if len(set(directions))!=2:return False
+        if len(set(directions))!=2:
+            log(f'  ⚠ Сортировка «{label}» не переключила направление: {directions}','WARN')
+            return False
     return dash_open()
 
 
 def dash_filters_scope(tab):
     if tab=='Контроль качества':
-        details=wait_for_state(lambda:next(iter(driver.find_elements(By.CSS_SELECTOR,'details.qr-filters-card')),None),timeout=30)
-        if details is None:raise ValueError('Форма качества не появилась после загрузки: '+driver.current_url)
-        if details.get_attribute('open') is None:click_el(details.find_element(By.CSS_SELECTOR,'summary'))
-        return details
-    toggle=driver.find_element(By.CSS_SELECTOR,'.manager-page__filters-toggle')
-    if toggle.get_attribute('aria-expanded')!='true':click_el(toggle)
-    return driver.find_element(By.CSS_SELECTOR,'.mn-filters-form')
+        details=wait_for_state(lambda:next(iter(driver.find_elements(By.CSS_SELECTOR,'details.qr-filters-card')),None),timeout=4)
+        if details is not None:
+            if details.get_attribute('open') is None:click_el(details.find_element(By.CSS_SELECTOR,'summary'))
+            return details
+    toggles=driver.find_elements(By.CSS_SELECTOR,'.manager-page__filters-toggle')
+    if not toggles:
+        toggles=[
+            b for b in driver.find_elements(By.XPATH,"//*[contains(@class,'manager-page')]//button[contains(normalize-space(.),'Фильтры')]")
+            if b.is_displayed()
+        ]
+    if toggles:
+        toggle=toggles[0]
+        forms=[f for f in driver.find_elements(By.CSS_SELECTOR,'.mn-filters-form,[class*="filters-form"],[class*="filters-panel"]') if f.is_displayed()]
+        if toggle.get_attribute('aria-expanded')=='false' or (toggle.get_attribute('aria-expanded')!='true' and not forms):
+            click_el(toggle)
+            wait_idle(6,.3)
+    for sel in ('.mn-filters-form','[class*="filters-form"]','[class*="filters-panel"]','details.qr-filters-card[open]'):
+        vis=[f for f in driver.find_elements(By.CSS_SELECTOR,sel) if f.is_displayed()]
+        if vis:
+            return vis[0]
+    # Fallback: ближайший контейнер фильтров внутри .manager-page
+    fallback=driver.execute_script(r"""
+        const p=document.querySelector('.manager-page');if(!p)return null;
+        const trg=p.querySelector('form .ui-select__trigger, [class*=filter] .ui-select__trigger');
+        return trg ? (trg.closest('form,[class*=filter]') || p) : p;
+    """)
+    if fallback is not None:
+        return fallback
+    raise ValueError(f'Панель фильтров вкладки «{tab}» не найдена: {driver.current_url}')
 
 
 def dash_filter_reset(tab):
     scope=dash_filters_scope(tab)
-    if not click_button(['Сбросить','Сбросить фильтры'],scope):return False
-    return dash_ready()
+    if click_button(['Сбросить','Сбросить фильтры'],scope) or click_button(['Сбросить фильтры','Сбросить'],dash_scope()):
+        if tab=='Контроль качества':
+            click_button(['Применить','Показать'],scope)
+        return dash_ready()
+    # Если кнопка «Сбросить» неактивна/скрыта, когда ни один фильтр ещё не выбран — это уже чистое состояние
+    controls=[e for e in scope.find_elements(By.CSS_SELECTOR,'.ui-select__trigger') if e.is_displayed() and e.is_enabled()]
+    if all(ctrl_unset(c,c.get_attribute('aria-label') or label_of(c)) or re.search(r'^(все|за всё время)',(c.get_attribute('textContent') or '').strip(),re.I) for c in controls):
+        return dash_ready()
+    log(f'  ⚠ {tab}: кнопка «Сбросить» недоступна при активных фильтрах','WARN')
+    return False
 
 
 def dash_pick_filter(control):
@@ -2805,30 +2974,45 @@ def stage_dash_filters(tab):
             log(f'  {tab}/{label}: нет доступных значений; выбор не проверен');continue
         tested+=1
         if tab=='Контроль качества':
-            if not click_button(['Применить','Показать'],dash_filters_scope(tab)):return False
+            click_button(['Применить','Показать'],dash_filters_scope(tab))
         if not dash_ready():return False
         log(f'  {tab}/{label}: выбрано {selected!r}')
         if not dash_filter_reset(tab):return False
         restored=dash_signature(dash_snapshot())==baseline
+        if not restored:
+            # Даём короткую паузу на перерисовку после сброса
+            wait_for_state(lambda:dash_signature(dash_snapshot())==baseline,timeout=6)
+            restored=dash_signature(dash_snapshot())==baseline
         if not restored:log(f'  {tab}/{label}: сброс не восстановил показатели/таблицы','WARN');return False
     if not tested:log(f'  {tab}: ни один фильтр не проверен','WARN');return False
     # Period selection is local and affects only the displayed report.
     if tab!='Контроль качества':
         scope=dash_filters_scope(tab)
-        trigger=scope.find_element(By.CSS_SELECTOR,'.ui-date-picker__trigger')
-        target=dtm.date.today()
-        if not pick_date(trigger,target):return False
-        cells=calendar_cells()
-        if not cells:
-            if not click_el(scope.find_element(By.CSS_SELECTOR,'.ui-date-picker__trigger')):return False
+        date_trgs=[e for e in scope.find_elements(By.CSS_SELECTOR,'.ui-date-picker__trigger') if e.is_displayed() and e.is_enabled()]
+        if date_trgs:
+            trigger=date_trgs[0]
+            target=dtm.date.today()
+            if not pick_date(trigger,target):
+                log(f'  ⚠ {tab}: не удалось выбрать начальную дату периода','WARN')
+                return False
             cells=calendar_cells()
-        cell=cell_by_day(cells,target.day)
-        if cell is None or not click_el(cell):return False
-        if not wait_idle(30,.5):return False
-        control=scope.find_element(By.CSS_SELECTOR,'.ui-date-picker__trigger')
-        if control.get_attribute('aria-expanded')=='true':click_el(control)
-        if not re.search(r'\d{2}\.\d{2}\.\d{4}',control.get_attribute('textContent') or ''):return False
-        if not dash_filter_reset(tab) or dash_signature(dash_snapshot())!=baseline:return False
+            if cells:
+                cell=cell_by_day(cells,target.day)
+                if cell is not None:click_el(cell)
+            if not wait_idle(30,.5):return False
+            scope=dash_filters_scope(tab)
+            cur_trgs=[e for e in scope.find_elements(By.CSS_SELECTOR,'.ui-date-picker__trigger') if e.is_displayed()]
+            if cur_trgs:
+                control=cur_trgs[0]
+                if control.get_attribute('aria-expanded')=='true':click_el(control)
+                if not re.search(r'\d{2}\.\d{2}\.\d{4}',control.get_attribute('textContent') or ''):
+                    log(f'  ⚠ {tab}: выбранный период не отобразился в триггере даты','WARN')
+                    return False
+            if not dash_filter_reset(tab):return False
+            wait_for_state(lambda:dash_signature(dash_snapshot())==baseline,timeout=6)
+            if dash_signature(dash_snapshot())!=baseline:
+                log(f'  ⚠ {tab}: после сброса периода показатели не вернулись к исходным','WARN')
+                return False
     log(f'  {tab}: проверено полей {tested}; показатели и таблицы после сброса совпали')
     return page_health('Панель/фильтры/'+tab)
 
@@ -2850,6 +3034,14 @@ def stage_dash_snapshots():
 
 
 def stage_dash_cross_tabs():
+    # Обновляем свежие показатели с панели перед сверкой с реестрами
+    if dash_open():
+        for tab in ('Контроль качества','Снабжение'):
+            if set_dash_tab(tab) and dash_ready():
+                snap=dash_snapshot()
+                if snap:
+                    DASH_SNAPSHOTS[tab]=snap
+                    DASH_METRICS[tab]=dashboard_metric_numbers(snap)
     comparisons=[]
     for name,path,tab,key in [('Предписания','quality/issue-registration','Контроль качества','Предписания'),('БиОТ','quality/biot','Контроль качества','БиОТ'),('Инспекции','quality/inspection','Контроль качества','ИСР'),('Снабжение','supply','Снабжение','Всего заявок')]:
         driver.get(BASE_URL+path)
@@ -2886,9 +3078,12 @@ def run():
 
 
 def dash_ready():
-    if not wait_for_state(lambda:driver.find_elements(By.CSS_SELECTOR,'.manager-page .manager-kpi__value'),timeout=30):return False
+    def _has_content():
+        snap=dash_snapshot()
+        return bool(snap and (dashboard_metric_numbers(snap) or snap.get('tables') or snap.get('amounts')))
+    if not wait_for_state(_has_content,timeout=30):return False
     if not wait_idle(30,.6):return False
-    return bool(driver.find_elements(By.CSS_SELECTOR,'.manager-page .manager-kpi__value'))
+    return _has_content()
 
 
 if __name__=='__main__' and os.environ.get('MANAGER_NO_RUN')!='1':

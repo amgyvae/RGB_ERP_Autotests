@@ -403,9 +403,11 @@ def classify_failure(reason: str, step_name: str = "") -> str:
     code_markers = (
         "nameerror", "typeerror", "attributeerror", "keyerror", "valueerror",
         "indexerror", "importerror", "syntaxerror", "unboundlocalerror",
+        "assertionerror", "zerodivisionerror",
         "is not defined", "has no attribute", "staleelement", "stale element",
         "invalid selector", "javascriptexception", "не найден селектор",
         "не найдена в форме", "модалка всё ещё открыта", "ожидался один input",
+        "ожидались фио/объект", "нераспознанные числа",
         "код завершения", "нет достоверного полного отчёта",
     )
     if any(m in txt for m in code_markers):

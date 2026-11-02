@@ -114,10 +114,59 @@ def _type_search(driver, inp, value: str):
 
 
 def find_route_section(driver):
+    try:
+        sec = driver.execute_script(r"""
+            function vis(e) { return !!(e && (e.offsetWidth || e.offsetHeight || e.getClientRects().length)); }
+            var direct = Array.from(document.querySelectorAll("section.evd-route, [class*='evd-route']:not([class*='evd-route__'])")).filter(vis);
+            if (direct.length) return direct[0];
+
+            var headings = Array.from(document.querySelectorAll("h1,h2,h3,h4,h5,div,span,p")).filter(function(e) {
+                if (!vis(e)) return false;
+                var own = Array.from(e.childNodes)
+                    .filter(function(n){ return n.nodeType === 3; })
+                    .map(function(n){ return n.textContent.trim(); })
+                    .join(" ").replace(/\s+/g, " ").trim();
+                var full = (e.textContent || "").replace(/\s+/g, " ").trim();
+                return own === "Маршрут согласования" || (full === "Маршрут согласования" && e.children.length === 0);
+            });
+            if (!headings.length) return null;
+
+            var h = headings[0];
+            var best = null;
+            var cur = h.parentElement;
+            for (var depth = 0; cur && cur !== document.body && depth < 7; depth++, cur = cur.parentElement) {
+                if (!vis(cur)) continue;
+                var txt = (cur.innerText || "").replace(/\s+/g, " ").trim();
+                // Не выходим за пределы карточки маршрута в общий контейнер всей страницы
+                if (/Основная информация|Позиции заявки|Позиции заказа/.test(txt) && best) break;
+                var stripped = txt
+                    .replace(/Маршрут согласования/gi, "")
+                    .replace(/Сменить маршрут/gi, "")
+                    .replace(/Изменить маршрут/gi, "")
+                    .trim();
+                var hasBody = stripped.length > 0
+                    || !!cur.querySelector("table, tbody, [class*='stage'], [class*='empty'], [class*='route__'], [class*='ui-select']")
+                    || cur.children.length >= 2;
+                best = cur;
+                if (hasBody && (stripped.length > 3 || cur.tagName === "SECTION" || /card|block|section|panel|route/i.test(cur.className || ""))) {
+                    // Проверим, не является ли cur только шапкой (заголовок + кнопка «Сменить маршрут»), когда тело лежит в родителе
+                    if (stripped.length === 0 && cur.parentElement && !/Основная информация|Позиции заявки|Позиции заказа/.test((cur.parentElement.innerText || ""))) {
+                        continue;
+                    }
+                    return cur;
+                }
+            }
+            return best;
+        """)
+        if sec is not None:
+            return sec
+    except Exception:
+        pass
     for xp in [
         "//section[contains(@class,'evd-route')]",
         "//*[normalize-space(text())='Маршрут согласования']/ancestor::section[1]",
-        "//*[normalize-space(text())='Маршрут согласования']/ancestor::div[.//table or .//button][1]",
+        "//*[normalize-space(text())='Маршрут согласования']/ancestor::div[count(.//*[self::table or contains(@class,'stage') or contains(@class,'empty')]) > 0][1]",
+        "//*[normalize-space(text())='Маршрут согласования']/ancestor::div[2]",
     ]:
         try:
             els = [e for e in driver.find_elements(By.XPATH, xp) if e.is_displayed()]
@@ -130,9 +179,9 @@ def find_route_section(driver):
 
 def find_approvers_modal(driver):
     for xp in [
-        "//div[@role='dialog'][.//h2[contains(normalize-space(.),'Согласующ')]]",
-        "//div[contains(@class,'action-modal__shell')][contains(normalize-space(.),'Согласующ')]",
-        "//*[@role='dialog' or @aria-modal='true'][contains(normalize-space(.),'Согласующ')]",
+        "//div[@role='dialog'][.//h2[contains(normalize-space(.),'Согласующ') or contains(normalize-space(.),'маршрут') or contains(normalize-space(.),'Маршрут')]]",
+        "//div[contains(@class,'action-modal__shell')][contains(normalize-space(.),'Согласующ') or contains(normalize-space(.),'маршрут') or contains(normalize-space(.),'Маршрут')]",
+        "//*[@role='dialog' or @aria-modal='true'][contains(normalize-space(.),'Согласующ') or .//*[contains(normalize-space(.),'Сменить маршрут') or contains(normalize-space(.),'Маршрут согласования')]]",
     ]:
         try:
             els = [e for e in driver.find_elements(By.XPATH, xp) if e.is_displayed()]
@@ -540,6 +589,21 @@ def _select_margulan_for_trigger(driver, trigger, log=None) -> bool:
 
 
 def _click_add_stage_button(driver, log=None) -> bool:
+    modal = find_approvers_modal(driver)
+    if modal is not None:
+        for xp in [
+            ".//button[contains(normalize-space(.),'Добавить этап')]",
+            ".//button[contains(normalize-space(.),'Этап')]",
+        ]:
+            try:
+                btns = [b for b in modal.find_elements(By.XPATH, xp) if b.is_displayed() and b.is_enabled()]
+                if btns and _click(driver, btns[0]):
+                    if log:
+                        log("  • Нажата кнопка добавления этапа (в окне маршрута)")
+                    time.sleep(1.0)
+                    return True
+            except Exception:
+                continue
     sec = find_route_section(driver)
     if sec is not None:
         try:
@@ -547,6 +611,21 @@ def _click_add_stage_button(driver, log=None) -> bool:
             time.sleep(0.3)
         except Exception:
             pass
+        for xp in [
+            ".//button[contains(@class,'evd-empty-stub__action')]",
+            ".//button[contains(normalize-space(.),'Добавить этап')]",
+            ".//button[contains(@class,'evd-route__add-badge')]",
+            ".//button[contains(normalize-space(.),'Этап') and not(contains(normalize-space(.),'Сменить'))]",
+        ]:
+            try:
+                btns = [b for b in sec.find_elements(By.XPATH, xp) if b.is_displayed() and b.is_enabled()]
+                if btns and _click(driver, btns[0]):
+                    if log:
+                        log("  • Нажата кнопка добавления этапа")
+                    time.sleep(1.2)
+                    return True
+            except Exception:
+                continue
     for xp in [
         "//button[contains(@class,'evd-empty-stub__action')]",
         "//section[contains(@class,'evd-route')]//button[contains(normalize-space(.),'Добавить этап')]",
@@ -575,19 +654,29 @@ def _find_unset_route_trigger(driver, scope=None):
             trgs = [
                 t for t in modal.find_elements(By.XPATH, ".//button[contains(@class,'ui-select__trigger')]")
                 if t.is_displayed() and t.is_enabled()
+                and not is_margulan_name(t.get_attribute("textContent") or "")
             ]
             if trgs:
-                return trgs[0]
+                pref = [
+                    t for t in trgs
+                    if any(w in (t.get_attribute("textContent") or "").lower()
+                           for w in ("согласующ", "пользовател", "сотрудник", "участник", "выбер"))
+                ]
+                return pref[0] if pref else trgs[-1]
         except Exception:
             pass
 
-    root = scope or find_route_section(driver) or driver
-    prefix = ".//" if scope or root is not driver else "//"
-    for xp in [
+    sec = scope or find_route_section(driver)
+    root = sec or driver
+    prefix = ".//" if root is not driver else "//"
+    xpaths = [
         f"{prefix}button[contains(@class,'ui-select__trigger')][contains(normalize-space(.),'Выбрать согласующего') or contains(normalize-space(.),'согласующ')]",
         f"{prefix}div[contains(@class,'evd-route__stages')]//button[contains(@class,'ui-select__trigger')]",
         f"{prefix}table[contains(@class,'evd-route__table')]//button[contains(@class,'ui-select__trigger')]",
-    ]:
+    ]
+    if root is not driver:
+        xpaths.append(".//button[contains(@class,'ui-select__trigger')]")
+    for xp in xpaths:
         try:
             trgs = [
                 t for t in root.find_elements(By.XPATH, xp)
@@ -601,66 +690,55 @@ def _find_unset_route_trigger(driver, scope=None):
     return None
 
 
-def setup_margulan_route(driver, log=None) -> bool:
-    """Гарантирует, что в «Маршруте согласования»:
-    1) удалены любые шаблонные согласующие (до и после нажатия «Добавить этап»),
-    2) добавлен этап и выбран пользователь Sh Margulan Ju."""
-    sec = find_route_section(driver)
-    if sec is not None:
-        try:
-            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", sec)
-            time.sleep(0.3)
-        except Exception:
-            pass
-
-    # 1. Если маршрут уже шаблонно предзаполнен другими пользователями — очищаем
+def _fill_route_pass(driver, log=None) -> None:
+    """Один проход очистки шаблона, добавления этапа и назначения Sh Margulan Ju."""
     clear_route_templates(driver, log=log)
     if route_only_margulan(driver):
-        if log:
-            log("  ✓ Маршрут согласования уже настроен на Sh Margulan Ju", "PASS")
-        return True
+        return
 
-    # 2. Если этапа ещё нет — нажимаем «Добавить этап» / «+ Этап»
     sec = find_route_section(driver)
     has_stages = False
     if sec is not None:
         try:
-            has_stages = bool([s for s in sec.find_elements(By.CSS_SELECTOR, ".evd-route__stage") if s.is_displayed()])
+            has_stages = bool([
+                s for s in sec.find_elements(By.CSS_SELECTOR, ".evd-route__stage, [class*='route__stage']")
+                if s.is_displayed()
+            ])
         except Exception:
             has_stages = False
 
     if not has_stages and _find_unset_route_trigger(driver) is None and find_approvers_modal(driver) is None:
         _click_add_stage_button(driver, log=log)
-        # Если нажатие «Добавить этап» подставило шаблон — сразу очищаем всех шаблонных пользователей!
         clear_route_templates(driver, log=log)
         if route_only_margulan(driver):
-            if log:
-                log("  ✓ Маршрут согласования настроен на Sh Margulan Ju", "PASS")
-            return True
+            return
 
-    # 3. Если после удаления шаблонных этапов не осталось ни одного этапа — создаём чистый этап
     sec = find_route_section(driver)
     if sec is not None:
         try:
-            stages_now = [s for s in sec.find_elements(By.CSS_SELECTOR, ".evd-route__stage") if s.is_displayed()]
+            stages_now = [
+                s for s in sec.find_elements(By.CSS_SELECTOR, ".evd-route__stage, [class*='route__stage']")
+                if s.is_displayed()
+            ]
         except Exception:
             stages_now = []
         if not stages_now and _find_unset_route_trigger(driver) is None and find_approvers_modal(driver) is None:
             _click_add_stage_button(driver, log=log)
             clear_route_templates(driver, log=log)
 
-    # 4. Заполняем Sh Margulan Ju во всех незаполненных этапах (обычно 1 этап)
     for _ in range(4):
         if route_only_margulan(driver):
             break
         trg = _find_unset_route_trigger(driver)
         if trg is None:
-            # Нажимаем «+ Добавить» / «Добавить» внутри этапа, у которого ещё нет Sh Margulan Ju
-            sec = find_route_section(driver)
+            active_root = find_approvers_modal(driver) or find_route_section(driver)
             clicked_add_person = False
-            if sec is not None:
-                stages = [s for s in sec.find_elements(By.CSS_SELECTOR, ".evd-route__stage") if s.is_displayed()]
-                target_scopes = [s for s in stages if not is_margulan_name(s.get_attribute("innerText") or "")] or [sec]
+            if active_root is not None:
+                stages = [
+                    s for s in active_root.find_elements(By.CSS_SELECTOR, ".evd-route__stage, [class*='route__stage']")
+                    if s.is_displayed()
+                ]
+                target_scopes = [s for s in stages if not is_margulan_name(s.get_attribute("innerText") or "")] or [active_root]
                 for sc in target_scopes:
                     btns = [
                         b for b in sc.find_elements(
@@ -669,6 +747,8 @@ def setup_margulan_route(driver, log=None) -> bool:
                         )
                         if b.is_displayed() and b.is_enabled()
                         and "этап" not in (b.get_attribute("textContent") or "").lower()
+                        and "строк" not in (b.get_attribute("textContent") or "").lower()
+                        and "позиц" not in (b.get_attribute("textContent") or "").lower()
                     ]
                     if btns and _click(driver, btns[0]):
                         clicked_add_person = True
@@ -684,7 +764,6 @@ def setup_margulan_route(driver, log=None) -> bool:
                         time.sleep(1.0)
                         break
 
-            # Если открылась модалка «Согласующие» с предзаполненным шаблоном — очищаем её
             modal = find_approvers_modal(driver)
             if modal is not None:
                 clear_approvers_modal_templates(driver, modal, log=log)
@@ -697,12 +776,30 @@ def setup_margulan_route(driver, log=None) -> bool:
             break
         time.sleep(0.8)
 
-    # 5. Нажимаем встроенную кнопку «Сохранить» в секции маршрута, если она есть
+    # Сохраняем модалку маршрута или встроенную кнопку «Сохранить», если она есть
+    modal_after = find_approvers_modal(driver)
+    if modal_after is not None:
+        try:
+            save_btns = [
+                b for b in modal_after.find_elements(
+                    By.XPATH,
+                    ".//button[normalize-space(.)='Сохранить' or normalize-space(.)='Применить' or normalize-space(.)='Подтвердить']"
+                )
+                if b.is_displayed() and b.is_enabled()
+            ]
+            if save_btns:
+                _click(driver, save_btns[-1])
+                time.sleep(1.2)
+        except Exception:
+            pass
+
     sec = find_route_section(driver)
     if sec is not None:
         try:
             save_btns = [
-                b for b in sec.find_elements(By.XPATH, ".//button[normalize-space(.)='Сохранить']")
+                b for b in sec.find_elements(
+                    By.XPATH, ".//button[normalize-space(.)='Сохранить' or normalize-space(.)='Применить']"
+                )
                 if b.is_displayed() and b.is_enabled()
             ]
             if save_btns:
@@ -710,6 +807,50 @@ def setup_margulan_route(driver, log=None) -> bool:
                 time.sleep(1.2)
         except Exception:
             pass
+
+
+def setup_margulan_route(driver, log=None) -> bool:
+    """Гарантирует, что в «Маршруте согласования»:
+    1) удалены любые шаблонные согласующие (до и после нажатия «Добавить этап» / «Сменить маршрут»),
+    2) добавлен этап и выбран пользователь Sh Margulan Ju."""
+    sec = find_route_section(driver)
+    if sec is not None:
+        try:
+            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", sec)
+            time.sleep(0.3)
+        except Exception:
+            pass
+
+    if route_only_margulan(driver):
+        if log:
+            log("  ✓ Маршрут согласования уже настроен на Sh Margulan Ju", "PASS")
+        return True
+
+    _fill_route_pass(driver, log=log)
+
+    sec = find_route_section(driver)
+    confirmed = route_only_margulan(driver) or (sec is not None and is_margulan_name(sec.get_attribute("innerText") or ""))
+
+    # Если маршрут оставался в режиме чтения (например, есть кнопка «Сменить маршрут» в карточке Заявки)
+    if not confirmed:
+        change_btns = []
+        for xp in [
+            "//*[self::button or self::a][normalize-space(.)='Сменить маршрут' or normalize-space(.)='Изменить маршрут' or normalize-space(.)='Настроить маршрут']",
+        ]:
+            try:
+                change_btns = [b for b in driver.find_elements(By.XPATH, xp) if b.is_displayed() and b.is_enabled()]
+                if change_btns:
+                    break
+            except Exception:
+                continue
+        if change_btns and _click(driver, change_btns[0]):
+            if log:
+                log("  • Открыто редактирование маршрута («Сменить маршрут»)")
+            time.sleep(1.2)
+            modal = find_approvers_modal(driver)
+            if modal is not None:
+                clear_approvers_modal_templates(driver, modal, log=log)
+            _fill_route_pass(driver, log=log)
 
     for _ in range(8):
         sec = find_route_section(driver)
@@ -719,6 +860,14 @@ def setup_margulan_route(driver, log=None) -> bool:
             return True
         time.sleep(0.8)
 
+    sec_dump = ""
+    try:
+        s_el = find_route_section(driver)
+        if s_el is not None:
+            sec_dump = " | ".join((s_el.get_attribute("innerText") or "").splitlines())[:200]
+    except Exception:
+        pass
     if log:
-        log("  ⚠ Sh Margulan Ju не подтверждён в маршруте согласования", "WARN")
+        log(f"  ⚠ Sh Margulan Ju не подтверждён в маршруте согласования ({sec_dump})", "WARN")
     return False
+

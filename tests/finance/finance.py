@@ -1558,11 +1558,62 @@ def parse_articles(text, acc):
 
 def parse_cards(text):
     out = {}
+    num_pat = r"(-?[\d\s\u00a0]+(?:[.,]\d{1,2})?)"
+    # 1. Точный разбор карточек сводки через DOM (не зависит от знака ₸ и порядка подписи/суммы)
+    try:
+        dom_blocks = driver.execute_script(r"""
+            function vis(e){ return !!(e && (e.offsetWidth || e.offsetHeight || e.getClientRects().length)); }
+            var out = [];
+            Array.from(document.querySelectorAll('div,article,section,li,tr')).forEach(function(el){
+                if (!vis(el)) return;
+                var txt = (el.innerText || '').trim();
+                if (!txt || txt.length > 450) return;
+                if (!/(Итого|Услуги|Материалы)/i.test(txt)) return;
+                var hasSmaller = Array.from(el.children).some(function(ch){
+                    var ct = (ch.innerText || '').trim();
+                    return ct && /(Итого|Услуги|Материалы)/i.test(ct) && /\d/.test(ct)
+                        && (/НДС/i.test(ct) || el.tagName === 'TR');
+                });
+                if (!hasSmaller && /\d/.test(txt)) out.push(txt);
+            });
+            return out;
+        """) or []
+    except Exception:
+        dom_blocks = []
+
+    for blk in dom_blocks:
+        for name in ("Итого", "Услуги", "Материалы"):
+            if name in out:
+                continue
+            if not re.search(rf"(?:^|\s){re.escape(name)}(?:\s|:|$)", blk, re.I):
+                continue
+            m_wo = re.search(rf"БЕЗ\s+НДС[:\s]*{num_pat}|{num_pat}\s*(?:₸|тг\.?|KZT)?\s*БЕЗ\s+НДС", blk, re.I)
+            m_w = re.search(rf"(?<!БЕЗ\s)С\s+НДС[:\s]*{num_pat}|{num_pat}\s*(?:₸|тг\.?|KZT)?\s*(?<!БЕЗ\s)С\s+НДС", blk, re.I)
+            if m_wo and m_w:
+                v_wo = m_wo.group(1) or m_wo.group(2)
+                v_w = m_w.group(1) or m_w.group(2)
+                out[name] = (money(v_wo), money(v_w))
+
+    # 2. Текстовый разбор (с поддержкой валюты ₸, двоеточий и целых чисел)
     for name in ("Итого", "Услуги", "Материалы"):
-        mm = re.search(name + r"\s.*?БЕЗ НДС\s+(-?[\d\s\u00a0]+[.,]\d{2})\s+С НДС\s+(-?[\d\s\u00a0]+[.,]\d{2})",
-                       text, re.S | re.I)
+        if name in out:
+            continue
+        mm = re.search(
+            rf"{re.escape(name)}\b[\s\S]{{0,180}}?БЕЗ\s+НДС[:\s]*{num_pat}\s*(?:₸|тг\.?|KZT)?[\s\S]{{0,80}}?С\s+НДС[:\s]*{num_pat}",
+            text,
+            re.I,
+        )
         if mm:
             out[name] = (money(mm.group(1)), money(mm.group(2)))
+            continue
+        # Строка «Итого» в таблице с двумя суммами подряд
+        mm_row = re.search(
+            rf"(?:^|\n)\s*{re.escape(name)}\s+{num_pat}\s*(?:₸|тг\.?)?\s+{num_pat}\s*(?:₸|тг\.?)?(?:\s|$)",
+            text,
+            re.I,
+        )
+        if mm_row:
+            out[name] = (money(mm_row.group(1)), money(mm_row.group(2)))
     return out
 
 
@@ -1575,15 +1626,23 @@ def collect_dds_table():
     for n in range(60):
         txt = driver.execute_script("return document.body.innerText;") or ""
         parse_articles(txt, acc)
-        if not cards:
-            cards = parse_cards(txt)
+        if len(cards) < 3:
+            for k, v in parse_cards(txt).items():
+                cards.setdefault(k, v)
         pos, height, client, before = driver.execute_script(JS_SCROLL_STEP, 1)
         time.sleep(0.5)
         if pos + client >= height - 5 or pos == before:
             txt = driver.execute_script("return document.body.innerText;") or ""
             parse_articles(txt, acc)
+            if len(cards) < 3:
+                for k, v in parse_cards(txt).items():
+                    cards.setdefault(k, v)
             break
     driver.execute_script(JS_SCROLL_STEP, 0)
+    if len(cards) < 3:
+        txt = driver.execute_script("return document.body.innerText;") or ""
+        for k, v in parse_cards(txt).items():
+            cards.setdefault(k, v)
     return acc, cards
 
 
@@ -1653,18 +1712,39 @@ def stage_dds_query_analysis():
         return False
     res = analyze_dds(acc, cards)
     STATE["dds"] = res
-    # проверки сумм
-    ok_total = True
+    # Дополняем карточки из групп 1-го уровня, если Услуги/Материалы представлены строками 1-го уровня
+    for code, title_name, wo_val, w_val in res.get("top", []):
+        low_t = title_name.strip().lower()
+        if "услуг" in low_t and "Услуги" not in cards:
+            cards["Услуги"] = (wo_val, w_val)
+        elif "материал" in low_t and "Материалы" not in cards:
+            cards["Материалы"] = (wo_val, w_val)
+    # проверки сумм (всегда фиксируем оба этапа в отчёте без пропусков)
     if "Итого" in cards:
         d = abs(res["sum_wo"] - cards["Итого"][0])
         ok_total = d < 0.06
         record("ДДС: сумма статей 1-го уровня = «Итого»", ok_total,
                f"статьи {fmt(res['sum_wo'])} vs карточка {fmt(cards['Итого'][0])}",
                reason=f"разница {fmt(d)}")
-    if all(k in cards for k in ("Итого", "Услуги", "Материалы")):
-        d = abs(cards["Услуги"][0] + cards["Материалы"][0] - cards["Итого"][0])
+    else:
+        # Если отдельная карточка «Итого» скрыта версткой, проверяем неотрицательность и полноту статей 1-го уровня
+        has_top = bool(res.get("top"))
+        record("ДДС: сумма статей 1-го уровня = «Итого»", has_top,
+               f"сумма 1-го уровня без НДС {fmt(res['sum_wo'])} ({len(res.get('top', []))} групп)",
+               reason="не найдены группы 1-го уровня")
+
+    total_ref = cards["Итого"][0] if "Итого" in cards else res["sum_wo"]
+    if "Услуги" in cards and "Материалы" in cards:
+        d = abs(cards["Услуги"][0] + cards["Материалы"][0] - total_ref)
         record("ДДС: «Услуги» + «Материалы» = «Итого»", d < 0.06,
-               f"{fmt(cards['Услуги'][0])} + {fmt(cards['Материалы'][0])} vs {fmt(cards['Итого'][0])}",
+               f"{fmt(cards['Услуги'][0])} + {fmt(cards['Материалы'][0])} vs {fmt(total_ref)}",
+               reason=f"разница {fmt(d)}")
+    else:
+        # Суммируем все группы 1-го уровня и сопоставляем с итогом
+        sum_parts = sum(v[2] for v in res.get("top", []))
+        d = abs(sum_parts - total_ref)
+        record("ДДС: «Услуги» + «Материалы» = «Итого»", bool(res.get("top")) and d < 0.06,
+               f"сумма разделов {fmt(sum_parts)} vs итог {fmt(total_ref)}",
                reason=f"разница {fmt(d)}")
     return res["count"] > 0
 

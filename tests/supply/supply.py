@@ -491,8 +491,9 @@ def read_toasts():
 
 MODAL_XPATHS = [
     "//div[contains(@class,'action-modal__shell')]",
-    "//div[contains(@class,'action-modal__body')]",
     "//*[@role='dialog' or @aria-modal='true']",
+    "//div[contains(@class,'action-modal__body')]",
+    "//div[contains(@class,'ant-modal-content')]",
     "//div[contains(@class,'ant-modal-body')]",
     "//div[contains(@class,'ant-drawer-body')]",
     "//*[contains(@class,'modal') and (contains(@class,'body') or contains(@class,'content'))]",
@@ -989,8 +990,16 @@ def approver_trigger():
     return None
 
 def add_approver():
-    from route_helper import setup_margulan_route
+    from route_helper import find_route_section, setup_margulan_route
+    m_open = find_modal()
+    if m_open is not None:
+        close_modal_soft(m_open)
+        time.sleep(0.5)
     goto_card()
+    if find_route_section(driver) is None and STATE.get("url"):
+        driver.get(STATE["url"])
+        wait_for_state(lambda: supply_card_ready(STATE["url"]))
+        time.sleep(1.0)
     return setup_margulan_route(driver, log=log)
 
 def try_open_and_cancel(text):
@@ -1246,8 +1255,13 @@ def date_text(trigger):
         return (trigger.get_attribute("textContent") or "").strip()
 
 def date_empty(trigger):
+    try:
+        if "placeholder" in (trigger.get_attribute("class") or "").lower():
+            return True
+    except Exception:
+        pass
     t = date_text(trigger).strip().lower()
-    return (not t) or ("выбрат" in t) or ("дд" in t and "гггг" in t)
+    return (not t) or (parse_date(t) is None) or ("выбер" in t) or ("выбрат" in t) or ("дд" in t and "гггг" in t)
 
 def date_triggers(scope=None):
     try:
@@ -1502,12 +1516,22 @@ def lines_state():
     return (0 if empty else rows), parse_total()
 
 
-PLACEHOLDERS = ("выбер", "выбрать", "час начала", "час окончания", "ед. измерения", "поиск")
+PLACEHOLDERS = (
+    "выбер", "выбрать", "укажит", "не выбран", "час начала", "час окончания",
+    "чч:мм", "00:00", "ед. измерения", "поиск",
+)
 
 
 def ctrl_unset(ctrl,label=""):
     if ctrl is None or ctrl is False:
         return True
+    try:
+        if "placeholder" in (ctrl.get_attribute("class") or "").lower():
+            return True
+        if ctrl.find_elements(By.CSS_SELECTOR, "[class*='placeholder']"):
+            return True
+    except Exception:
+        pass
     text=(ctrl.get_attribute('textContent') or '').strip().lower()
     return not text or text.startswith(PLACEHOLDERS) or text==label.lower()
 
@@ -1890,6 +1914,15 @@ def fill_dates_in(scope_hint_labels, start_days=0, length_days=7):
         is_end = bool(re.search(r"оконч|\bпо\b|конец", lab)) or (not lab and k % 2 == 1)
         target = today + dtm.timedelta(days=start_days + (length_days if is_end else 0))
         ok = pick_date(t, target)
+        # Если это диапазонный календарь (период) и он ждёт вторую дату — выбираем дату окончания
+        cells_after = calendar_cells()
+        if cells_after and len(trs) == 1:
+            end_target = target + dtm.timedelta(days=max(1, length_days))
+            calendar_goto(end_target.year, end_target.month)
+            end_cell = cell_by_day(calendar_cells() or cells_after, end_target.day)
+            if end_cell is not None:
+                click_el(end_cell)
+                time.sleep(0.3)
         log(f"    {'✓' if ok else '⚠'} {lab or 'дата'}: {date_text(t) or 'не выбрана'}",
             "PASS" if ok else "WARN")
         n += 1 if ok else 0
@@ -1917,10 +1950,24 @@ def stage_login():
 def switch_user(login, password):
     if not is_login_page() and _CURRENT_LOGIN == login:
         return True
-    if not logout_current_account():
-        driver.get(BASE_URL)
-        wait_for_state(is_login_page)
-    return login_with(login, password)
+    for attempt in range(3):
+        if not logout_current_account():
+            try:
+                driver.execute_cdp_cmd("Network.clearBrowserCookies", {})
+            except Exception:
+                pass
+            try:
+                driver.delete_all_cookies()
+                driver.execute_script("try{localStorage.clear();sessionStorage.clear();}catch(e){}")
+            except Exception:
+                pass
+            driver.get(BASE_URL)
+            wait_for_state(is_login_page, timeout=20)
+        if login_with(login, password):
+            return True
+        log(f"  ⚠ Повторная попытка переключения на {login} ({attempt + 2}/3)...", "WARN")
+        time.sleep(1.5)
+    return False
 
 
 # ==========================================
@@ -3253,6 +3300,18 @@ def stage_equip_position():
     modal = find_modal("Добавить позицию") or find_modal("Добавить строку") or find_modal() or modal
     fill_dates_in(modal, start_days=1, length_days=7)
     modal = find_modal("Добавить позицию") or find_modal("Добавить строку") or find_modal() or modal
+    # Дозаполняем селекты, которые могли разблокироваться после выбора дат
+    try:
+        for s in modal.find_elements(By.XPATH, ".//button[contains(@class,'ui-select__trigger')]"):
+            if s.is_displayed() and ctrl_enabled(s) and ctrl_unset(s):
+                if open_popup(s):
+                    _, opts = wait_options(s, 4)
+                    if opts:
+                        _click_option(opts[0], s)
+                    close_popup(s)
+                    time.sleep(0.3)
+    except Exception:
+        pass
     for n_lbl, n_val in [
         ("Количество", "10"),
         ("Кол-во", "10"),
@@ -3346,11 +3405,18 @@ def stage_equip_position():
             try:
                 modal_errs = driver.execute_script("""
                     var m = arguments[0];
-                    return Array.from(m.querySelectorAll('[class*=error], [role=alert], [class*=invalid]'))
+                    return Array.from(m.querySelectorAll('[class*=error], [role=alert], [class*=invalid], [aria-invalid="true"], [class*=message]'))
                         .filter(e => e.offsetWidth || e.offsetHeight)
-                        .map(e => (e.innerText || '').trim())
+                        .map(e => (e.innerText || e.getAttribute('placeholder') || '').trim())
                         .filter(Boolean);
                 """, m) or []
+                state_dump = driver.execute_script("""
+                    var m = arguments[0];
+                    return Array.from(m.querySelectorAll('button.ui-select__trigger, [class*=date-picker__trigger], input:not([type=hidden]):not([type=file]), textarea'))
+                        .filter(e => e.offsetWidth || e.offsetHeight)
+                        .map(e => (e.tagName + ':' + ((e.value !== undefined && e.tagName !== 'BUTTON') ? e.value : (e.innerText || '')).trim().replace(/\\s+/g,' ')).slice(0, 60));
+                """, m) or []
+                log(f"    Состояние полей окна: {state_dump[:20]}")
             except Exception:
                 pass
         log(f"  ⚠ Окно не закрылось (валидация: {modal_errs}). Уведомления: {read_toasts()}", "WARN")
