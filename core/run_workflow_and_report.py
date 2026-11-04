@@ -27,6 +27,7 @@ from artifact_paths import ROOT_DIR, SCREENS_DIR, LOGS_DIR, screen_path, log_pat
 import os
 import sys
 import re
+import time
 import subprocess
 import glob
 from datetime import datetime
@@ -426,9 +427,37 @@ def classify_failure(reason: str, step_name: str = "") -> str:
     return "Баг сайта"
 
 
+def _format_duration_ru(seconds: float) -> str:
+    sec = max(0, int(round(float(seconds or 0))))
+    hrs, rem = divmod(sec, 3600)
+    mins, secs = divmod(rem, 60)
+    if hrs:
+        return f"{hrs} ч {mins} мин {secs} сек"
+    if mins:
+        return f"{mins} мин {secs} сек"
+    return f"{secs} сек"
+
+
+def _module_ecp_badge(script_name: str) -> str:
+    base = os.path.basename(script_name).lower()
+    nca_scripts = {
+        "gpr_test.py",
+        "contract_workflow_new_design.py",
+        "waybill_workflow_new_design.py",
+        "invoice_workflow_ecp.py",
+        "test-akt.py",
+    }
+    if base in nca_scripts:
+        return "С ЭЦП (NCALayer)"
+    web_only_env = os.environ.get("RGB_WEB_ONLY", "").strip().lower()
+    if web_only_env in ("0", "false", "no"):
+        return "С ЭЦП"
+    return "БЕЗ ЭЦП"
+
+
 def save_suite_module_summary(script_name: str, module_label: str, passed_checks: int,
                               total_checks: int, skipped_count: int, failed_items: list,
-                              error: str = ""):
+                              error: str = "", duration_sec: float = 0.0):
     try:
         stem = Path(script_name).stem.lower()
         out_path = LOGS_DIR / f"suite_module_{stem}.json"
@@ -453,6 +482,8 @@ def save_suite_module_summary(script_name: str, module_label: str, passed_checks
             "passed_checks": int(passed_checks),
             "total_checks": int(total_checks),
             "skipped_count": int(skipped_count),
+            "duration_sec": round(max(0.0, float(duration_sec or 0.0)), 1),
+            "ecp_mode": _module_ecp_badge(script_name),
             "ok": bool(total_checks > 0 and passed_checks == total_checks and not failures and not error),
             "error": _clean_reason(error) if error else "",
             "failures": failures,
@@ -463,24 +494,43 @@ def save_suite_module_summary(script_name: str, module_label: str, passed_checks
 
 
 def send_telegram_summary(script_name: str, findings: list, reasons: dict,
-                          *, skipped=(), error="", sheet_error="", screenshot=None):
+                          *, skipped=(), error="", sheet_error="", screenshot=None,
+                          duration_sec: float = 0.0):
     """Common summary and delivery for workflow modules, including Finance."""
     module_label = MODULE_LABELS.get(os.path.basename(script_name), script_name)
     total_checks = len(findings) + len(skipped)
     passed_checks = sum(bool(ok) for _, ok in findings)
     failed_items = [(name, reasons.get(name)) for name, ok in findings if not ok]
+    ecp_badge = _module_ecp_badge(script_name)
+    dur_str = _format_duration_ru(duration_sec) if duration_sec and duration_sec > 0 else ""
 
     save_suite_module_summary(
         script_name, module_label, passed_checks, total_checks,
-        len(skipped), failed_items, error=error
+        len(skipped), failed_items, error=error, duration_sec=duration_sec
     )
 
+    meta_parts = []
+    if dur_str:
+        meta_parts.append(f"⏱ <b>Длительность:</b> {dur_str}")
+    meta_parts.append(f"🔐 <b>Режим:</b> {escape(ecp_badge)}")
+    if skipped:
+        meta_parts.append(f"⏸ <b>Не выполнено:</b> {len(skipped)}")
+    meta_line = " · ".join(meta_parts)
+
     if findings and not failed_items and not skipped and not error and (not sheet_error or sheet_error == "FileNotFoundError"):
-        lines = [f"✅ <b>Автотест: {escape(module_label)} — УСПЕШНО</b> ({passed_checks}/{total_checks})", ""]
+        lines = [
+            f"✅ <b>Автотест: {escape(module_label)} — УСПЕШНО</b> ({passed_checks}/{total_checks})",
+            meta_line,
+            "",
+        ]
     else:
         emoji = "🔥" if (failed_items or error) else "⚠️"
         title = "ЕСТЬ ОШИБКИ" if (failed_items or error) else "ВЫПОЛНЕН НЕ ПОЛНОСТЬЮ"
-        lines = [f"{emoji} <b>Автотест: {escape(module_label)} — {title}</b> ({passed_checks}/{total_checks} успешно)", ""]
+        lines = [
+            f"{emoji} <b>Автотест: {escape(module_label)} — {title}</b> ({passed_checks}/{total_checks} успешно)",
+            meta_line,
+            "",
+        ]
 
     if error:
         origin = classify_failure(error, "Ошибка запуска")
@@ -570,25 +620,43 @@ def contacts_findings_for_sheet(results, script_path=None):
     checks = contacts_checks(script_path)
     return [('Контакты: ' + checks[r['id'] - 1]['name'], r['status'] == 'PASS') for r in results if r['status'] != 'SKIP']
 
-def contacts_summary(results, script_path=None):
+def contacts_summary(results, script_path=None, duration_sec: float = 0.0):
     checks = contacts_checks(script_path)
     total_count = len(results)
     passed_count = sum(1 for r in results if r['status'] == 'PASS')
     failed = [r for r in results if r['status'] == 'FAIL']
     skipped = [r for r in results if r['status'] == 'SKIP']
+    ecp_badge = _module_ecp_badge("contacts_test.py")
+    dur_str = _format_duration_ru(duration_sec) if duration_sec and duration_sec > 0 else ""
 
     failed_items = [(checks[r['id'] - 1]['name'], r.get('reason', '')) for r in failed]
     save_suite_module_summary(
         "contacts_test.py", "Контакты", passed_count, total_count,
-        len(skipped), failed_items
+        len(skipped), failed_items, duration_sec=duration_sec
     )
 
+    meta_parts = []
+    if dur_str:
+        meta_parts.append(f"⏱ <b>Длительность:</b> {dur_str}")
+    meta_parts.append(f"🔐 <b>Режим:</b> {escape(ecp_badge)}")
+    if skipped:
+        meta_parts.append(f"⏸ <b>Не выполнено:</b> {len(skipped)}")
+    meta_line = " · ".join(meta_parts)
+
     if not failed and not skipped:
-        lines = [f"✅ <b>Автотест: Контакты — УСПЕШНО</b> ({passed_count}/{total_count})", ""]
+        lines = [
+            f"✅ <b>Автотест: Контакты — УСПЕШНО</b> ({passed_count}/{total_count})",
+            meta_line,
+            "",
+        ]
     else:
         icon = '🔥' if failed else '⚠️'
         title = 'ЕСТЬ ОШИБКИ' if failed else 'ВЫПОЛНЕН НЕ ПОЛНОСТЬЮ'
-        lines = [f"{icon} <b>Автотест: Контакты — {title}</b> ({passed_count}/{total_count} успешно)", ""]
+        lines = [
+            f"{icon} <b>Автотест: Контакты — {title}</b> ({passed_count}/{total_count} успешно)",
+            meta_line,
+            "",
+        ]
 
     lines.append("<b>Этапы сценария:</b>")
     for idx, r in enumerate(results, 1):
@@ -659,6 +727,7 @@ def contacts_stream(command, cwd, env, log_path, timeout=1800):
 
 
 def run_contacts(script_path, args, report_results, tg_send, tg_photo):
+    started_ts = time.monotonic()
     run_id = uuid.uuid4().hex
     env = dict(os.environ, CONTACTS_RUN_ID=run_id, PYTHONIOENCODING='utf-8')
     script_path = Path(script_path).resolve()
@@ -670,20 +739,26 @@ def run_contacts(script_path, args, report_results, tg_send, tg_photo):
         if completed.returncode not in (0, 1) or (completed.returncode != 0 and all((r['status'] == 'PASS' for r in results))):
             raise ValueError(f'Код завершения {completed.returncode} противоречит итогам')
     except Exception as exc:
+        dur = time.monotonic() - started_ts
+        save_suite_module_summary(
+            "contacts_test.py", "Контакты", 0, 25, 25, [],
+            error=str(exc)[:300], duration_sec=dur
+        )
         message = '❌ <b>Автотест: Контакты</b>\nНет достоверного полного отчёта: ' + escape(str(exc)[:500])
         print(message)
         tg_send(message)
         return 2
+    dur = time.monotonic() - started_ts
     findings = contacts_findings_for_sheet(results, script_path)
     try:
         report_results(findings, row_range=CONTACTS_ROW_RANGE)
     except Exception as exc:
         print('Не удалось записать результаты в Google Sheets:', type(exc).__name__)
         tg_send('⚠️ <b>Контакты: результаты не записаны в Google Sheets</b>\nЛокальный отчёт сохранён.')
-        for message in contacts_summary(results, script_path):
+        for message in contacts_summary(results, script_path, duration_sec=dur):
             tg_send(message)
         return 2
-    for message in contacts_summary(results, script_path):
+    for message in contacts_summary(results, script_path, duration_sec=dur):
         tg_send(message)
     screenshot = contacts_current_screenshot(results, run_id)
     if screenshot:
@@ -716,6 +791,7 @@ def validate_workflow_results(payload, run_id, expected):
 
 
 def run_structured_workflow(script_path, args, module_key, checks_file, row_range):
+    started_ts = time.monotonic()
     for stream_name in ('stdout', 'stderr'):
         stream = getattr(sys, stream_name, None)
         if hasattr(stream, 'reconfigure'):
@@ -735,7 +811,8 @@ def run_structured_workflow(script_path, args, module_key, checks_file, row_rang
         try:
             expected = selected_quality_checks(expected, args)
         except ValueError as exc:
-            send_telegram_summary(script.name, [], {}, skipped=[], error=str(exc))
+            send_telegram_summary(script.name, [], {}, skipped=[], error=str(exc),
+                                  duration_sec=time.monotonic() - started_ts)
             return 2
         selective_quality = fixed_only(args)
     run_id = uuid.uuid4().hex
@@ -760,6 +837,7 @@ def run_structured_workflow(script_path, args, module_key, checks_file, row_rang
             run_error = f'Код завершения {completed.returncode}; см. лог {log_path.name}'
     except Exception as exc:
         run_error = f'{type(exc).__name__}: нет достоверного полного отчёта; см. {log_path.name}'
+    duration_sec = time.monotonic() - started_ts
     findings = [(row['name'], row['ok']) for row in rows]
     if findings:
         try:
@@ -777,7 +855,8 @@ def run_structured_workflow(script_path, args, module_key, checks_file, row_rang
     delivery_error = False
     try:
         send_telegram_summary(script.name, findings, reasons, skipped=skipped,
-                              error=run_error, sheet_error=sheet_error, screenshot=screenshot)
+                              error=run_error, sheet_error=sheet_error, screenshot=screenshot,
+                              duration_sec=duration_sec)
     except Exception as exc:
         delivery_error = True
         print('Ошибка общего обработчика Telegram:', type(exc).__name__, flush=True)
@@ -858,13 +937,21 @@ def main():
               f"Добавь его в MODULE_CONFIG в этом файле.")
         return
 
+    legacy_started = time.monotonic()
     findings, reasons = run_and_collect(
         script_path, config["tasks"], config.get("result_format", "standard"), sys.argv[2:]
     )
+    legacy_dur = time.monotonic() - legacy_started
 
     if not findings:
+        mod_lbl = MODULE_LABELS.get(script_name, script_name)
+        save_suite_module_summary(
+            script_name, mod_lbl, 0, len(config.get("tasks", [])),
+            len(config.get("tasks", [])), [],
+            error="Скрипт завершился без строк итогового отчёта", duration_sec=legacy_dur
+        )
         print("Не нашёл ни одной строки с итогами в выводе — сверь MODULE_CONFIG и формат отчёта.")
-        tg_send(f"❌ <b>Автотест: {MODULE_LABELS.get(script_name, script_name)}</b>\n"
+        tg_send(f"❌ <b>Автотест: {mod_lbl}</b>\n"
                 f"Не нашёл ни одной строки с итогами в выводе скрипта — "
                 f"возможно, упал раньше, чем успел что-то залогировать.")
         return
@@ -875,7 +962,7 @@ def main():
     # Google Sheets API (429 Quota exceeded).
     report_results(findings, row_range=config["row_range"])
 
-    send_telegram_summary(script_name, findings, reasons)
+    send_telegram_summary(script_name, findings, reasons, duration_sec=legacy_dur)
 
 
 if __name__ == "__main__":

@@ -92,9 +92,11 @@ def _find_row_in_column(tasks_column, task_name: str, row_range=None):
                         .replace("бейсембаев куаныш", "ерлан талгатович")
                         .replace("алдажаров диас", "талгат ерланович")),
         ]
-        if "sh margulan ju" in norm_target:
-            for legacy_name in ("бейсембаев куаныш", "ерлан талгатович", "талгат ерланович", "алдажаров диас"):
-                candidates.append(norm_target.replace("sh margulan ju", legacy_name))
+        for person_alias in ("sh margulan ju", "алдажаров диас", "бейсембаев куаныш", "талгат ерланович", "ерлан талгатович"):
+            if person_alias in norm_target:
+                for legacy_name in ("бейсембаев куаныш", "ерлан талгатович", "талгат ерланович", "алдажаров диас", "sh margulan ju"):
+                    if legacy_name != person_alias:
+                        candidates.append(norm_target.replace(person_alias, legacy_name))
         for cand in candidates:
             for i in range(start, min(end, len(tasks_column)) + 1):
                 value = tasks_column[i - 1] if i - 1 < len(tasks_column) else ""

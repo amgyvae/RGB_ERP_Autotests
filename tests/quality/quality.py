@@ -830,16 +830,27 @@ def login_with(login_value, password_value):
     global CURRENT_LOGIN
     CURRENT_LOGIN = None
     log(f"  Логин под: {login_value}")
-    for sub_try in range(2):
-        if not is_login_page():
+    for sub_try in range(3):
+        if not is_login_page() and bool(find_buttons(['Выйти']) or driver.find_elements(By.CSS_SELECTOR, 'aside, nav')):
+            CURRENT_LOGIN = login_value
+            return True
+        try:
+            WebDriverWait(driver, WAIT).until(EC.visibility_of_element_located(
+                (By.XPATH, "//input[@type='password']")))
+        except Exception:
+            if not is_login_page() and bool(find_buttons(['Выйти']) or driver.find_elements(By.CSS_SELECTOR, 'aside, nav')):
+                CURRENT_LOGIN = login_value
+                return True
+            driver.get(BASE_URL)
             try:
-                WebDriverWait(driver, WAIT).until(EC.visibility_of_element_located(
+                WebDriverWait(driver, 15).until(EC.visibility_of_element_located(
                     (By.XPATH, "//input[@type='password']")))
             except Exception:
                 if not is_login_page() and bool(find_buttons(['Выйти']) or driver.find_elements(By.CSS_SELECTOR, 'aside, nav')):
                     CURRENT_LOGIN = login_value
                     return True
-                return False
+                time.sleep(1.5)
+                continue
         login_field = None
         for xp in ["//input[contains(@placeholder,'огин')]", "//input[@name='username' or @id='username']",
                    "//input[contains(@placeholder,'Login')]", "//input[@type='email']",
@@ -860,7 +871,8 @@ def login_with(login_value, password_value):
         except Exception:
             pass
         if not login_field or not pw_field:
-            return False
+            time.sleep(1.5)
+            continue
         type_text(login_field, login_value)
         type_text(pw_field, password_value)
         clicked = False
@@ -889,7 +901,7 @@ def login_with(login_value, password_value):
             dismiss_news_popup(wait=2)
             CURRENT_LOGIN = login_value
             return True
-        time.sleep(1.0)
+        time.sleep(1.5)
     log(f"  ⚠ Логин {login_value} не удался", "WARN")
     return False
 

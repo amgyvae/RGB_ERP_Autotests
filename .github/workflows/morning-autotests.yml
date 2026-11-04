@@ -190,6 +190,15 @@ jobs:
           echo "$MATRIX"
           python run_all.py --notify-start "$MODULES" $FLAGS
 
+      - name: Метаданные старта прогона
+        if: steps.gate.outputs.should_run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-suite-meta-${{ github.run_number }}
+          path: logs/suite_start_meta.json
+          retention-days: 14
+          if-no-files-found: ignore
+
   test:
     name: ${{ matrix.title }}
     needs: plan
@@ -205,6 +214,7 @@ jobs:
     env:
       HEADLESS: ${{ vars.HEADLESS || '1' }}
       TG_ENABLED: ${{ vars.TG_ENABLED || '1' }}
+      RGB_WEB_ONLY: ${{ needs.plan.outputs.web_only == 'true' && '1' || '0' }}
       RGB_ACCOUNT1_LOGIN: jyktmargyplay2@gmail.com
       RGB_ACCOUNT1_PASSWORD: '12341234'
       RGB_ACCOUNT1_PASSWORD_ALT: '12341234'

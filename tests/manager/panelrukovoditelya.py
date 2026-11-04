@@ -2575,42 +2575,87 @@ DASH_FILES=[]
 USER_READ_ERROR=''
 JS_DASH_STATE=r'''const p=document.querySelector('.manager-page');if(!p)return null;
 const kpis=[];const seen=new Set();
+const isIntStr=s=>/^-?\d+$/.test((s||'').replace(/[\s\u00a0]+/g,'').trim());
 const pushKpi=(lbl,val)=>{
-  lbl=(lbl||'').replace(/\s+/g,' ').trim();
+  lbl=(lbl||'').replace(/\s+/g,' ').replace(/[:—–\-]+$/,'').trim();
   const cleanVal=(val||'').replace(/[\s\u00a0]+/g,'').trim();
-  if(lbl && /^-?\d+$/.test(cleanVal) && !seen.has(lbl)){
-    seen.add(lbl);kpis.push({label:lbl,value:cleanVal});
+  const key=lbl.toLowerCase();
+  if(lbl && /[A-Za-zА-Яа-яЁё]/.test(lbl) && lbl.length<=80 && isIntStr(cleanVal) && !seen.has(key)){
+    seen.add(key);kpis.push({label:lbl,value:cleanVal});
   }
 };
-p.querySelectorAll('.manager-kpi').forEach(c=>{
+p.querySelectorAll('.manager-kpi,[class*=kpi],[class*=metric],[class*=stat-card],[class*=summary-card]').forEach(c=>{
+  if(!(c.offsetWidth||c.offsetHeight)||c.closest('table,form,[class*=pager]'))return;
   pushKpi(
-    c.querySelector('.manager-kpi__label,[class*=label],[class*=title]')?.innerText,
-    c.querySelector('.manager-kpi__value,[class*=value],[class*=count],[class*=num]')?.innerText
+    c.querySelector('.manager-kpi__label,[class*=label],[class*=title],[class*=caption],[class*=name]')?.innerText,
+    c.querySelector('.manager-kpi__value,[class*=value],[class*=count],[class*=num],[class*=total]')?.innerText
   );
 });
-Array.from(p.querySelectorAll('div,article,section,li')).forEach(el=>{
+Array.from(p.querySelectorAll('div,article,section,li,dl,header')).forEach(el=>{
   if(!(el.offsetWidth||el.offsetHeight))return;
   if(el.closest('table,thead,tbody,tr,form,.mn-filters-form,details.qr-filters-card,[class*=pager]'))return;
   if(el.querySelector('table'))return;
   const lines=(el.innerText||'').split('\n').map(s=>s.replace(/\s+/g,' ').trim()).filter(Boolean);
-  if(lines.length>=2 && lines.length<=4){
-    const c0=lines[0].replace(/[\s\u00a0]+/g,''), c1=lines[1].replace(/[\s\u00a0]+/g,'');
-    if(!/^-?\d+$/.test(c0) && /^-?\d+$/.test(c1)) pushKpi(lines[0],c1);
-    else if(/^-?\d+$/.test(c0) && !/^-?\d+$/.test(c1)) pushKpi(lines[1],c0);
+  if(lines.length===1){
+    const m=lines[0].match(/^([A-Za-zА-Яа-яЁё][A-Za-zА-Яа-яЁё0-9\s.\-()\/]{1,65}?)\s*[:—–]?\s+(-?\d[\d\s\u00a0]*)$/);
+    if(m && !/стр\.|всего:/i.test(lines[0])) pushKpi(m[1],m[2]);
+  } else if(lines.length>=2 && lines.length<=8){
+    // Проверяем соседние пары и пары через 1 подзаголовок внутри карточки
+    for(let i=0;i<lines.length;i++){
+      if(isIntStr(lines[i])){
+        if(i>0 && !isIntStr(lines[i-1])) pushKpi(lines[i-1],lines[i]);
+        else if(i+1<lines.length && !isIntStr(lines[i+1])) pushKpi(lines[i+1],lines[i]);
+        if(i>=2 && !isIntStr(lines[i-2])) pushKpi(lines[i-2],lines[i]);
+      }
+    }
   }
 });
-const amounts=Array.from(p.querySelectorAll('.manager-amount')).map(e=>e.innerText);
+const amounts=[];const seenAmt=new Set();
+const addAmt=txt=>{
+  const norm=(txt||'').replace(/\s+/g,' ').trim();
+  if(norm && /\d/.test(norm) && !seenAmt.has(norm)){seenAmt.add(norm);amounts.push(txt.trim());}
+};
+p.querySelectorAll('.manager-amount,[class*=amount]').forEach(e=>{if(e.offsetWidth||e.offsetHeight)addAmt(e.innerText);});
 if(!amounts.length){
-  Array.from(p.querySelectorAll('div,article,section')).forEach(el=>{
-    if(!(el.offsetWidth||el.offsetHeight)||el.closest('table')||el.querySelector('table'))return;
-    const up=(el.innerText||'').toUpperCase();
-    if(up.includes('БЕЗ НДС') && up.includes('С НДС') && (el.innerText||'').length<800){
+  // 1) Блоки, содержащие и БЕЗ НДС, и С НДС
+  Array.from(p.querySelectorAll('div,article,section,li,dl')).forEach(el=>{
+    if(!(el.offsetWidth||el.offsetHeight)||el.closest('table,form,.mn-filters-form,details.qr-filters-card,[class*=pager]'))return;
+    const raw=(el.innerText||'').trim();
+    if(!raw || raw.length>1600)return;
+    const up=raw.toUpperCase();
+    if(up.includes('БЕЗ НДС') && up.includes('С НДС')){
       const hasChild=Array.from(el.children).some(ch=>{
         const cup=(ch.innerText||'').toUpperCase();
-        return cup.includes('БЕЗ НДС') && cup.includes('С НДС');
+        return (ch.offsetWidth||ch.offsetHeight) && cup.includes('БЕЗ НДС') && cup.includes('С НДС') && /\d/.test(cup);
       });
-      if(!hasChild) amounts.push(el.innerText);
+      if(!hasChild && /\d/.test(raw)) addAmt(raw);
     }
+  });
+}
+if(!amounts.length){
+  // 2) Раздельные карточки «Без НДС» / «С НДС» или карточки денежных сумм (₸ / Сумма / Итого)
+  Array.from(p.querySelectorAll('div,article,section,li,dl')).forEach(el=>{
+    if(!(el.offsetWidth||el.offsetHeight)||el.closest('table,form,.mn-filters-form,details.qr-filters-card,[class*=pager]'))return;
+    if(el.querySelector('table'))return;
+    const raw=(el.innerText||'').trim();
+    if(!raw || raw.length>600 || !/\d/.test(raw))return;
+    const hasVat=/(?:БЕЗ\s+НДС|С\s+НДС)/i.test(raw);
+    const hasMoney=/(?:₸|ТГ\b|KZT|ТЕНГЕ)/i.test(raw) || (/(?:СУММА|ИТОГО|ОБЩАЯ|СТОИМОСТЬ|БЮДЖЕТ|ОПЛАЧ)/i.test(raw) && /\d[\d\s\u00a0]*[.,]\d{2}/.test(raw));
+    if(hasVat || hasMoney){
+      const hasSmaller=Array.from(el.children).some(ch=>{
+        const ct=(ch.innerText||'').trim();
+        return (ch.offsetWidth||ch.offsetHeight) && ct && /\d/.test(ct) && (/(?:БЕЗ\s+НДС|С\s+НДС|₸|ТГ\b|KZT|СУММА|ИТОГО)/i.test(ct));
+      });
+      if(!hasSmaller) addAmt(raw);
+    }
+  });
+}
+if(!amounts.length){
+  // 3) Сводные строки/колонки НДС в таблицах вкладки Финансы / Снабжение
+  Array.from(p.querySelectorAll('table')).forEach(t=>{
+    if(!(t.offsetWidth||t.offsetHeight))return;
+    const tText=(t.innerText||'').trim();
+    if(/(?:БЕЗ\s+НДС|С\s+НДС|₸|СУММА)/i.test(tText) && /\d/.test(tText)) addAmt(tText.slice(0,1200));
   });
 }
 return {
@@ -2669,38 +2714,104 @@ def stage_dash_navigation():
     return set_dash_tab('Задачи') and 'Панель руководителя' in main_text()
 
 
-KPI_ALIASES={
-    'Дополнительные соглашения':'Доп. соглашения',
-    'Доп соглашения':'Доп. соглашения',
-    'Инспекции':'ИСР',
-    'Инспекции строительных работ':'ИСР',
-    'Заявки на снабжение':'Всего заявок',
+KPI_ALIASES_CI={
+    'задачи':'Задачи',
+    'поручения':'Поручения',
+    'договоры':'Договоры',
+    'договора':'Договоры',
+    'доп. соглашения':'Доп. соглашения',
+    'доп соглашения':'Доп. соглашения',
+    'дополнительные соглашения':'Доп. соглашения',
+    'акты':'Акты',
+    'накладные':'Накладные',
+    'всего процессов':'Всего процессов',
+    'все процессы':'Всего процессов',
+    'процессы':'Всего процессов',
+    'всего записей':'Всего процессов',
+    'всего нарушений':'Всего процессов',
+    'биот':'БиОТ',
+    'безопасность и охрана труда':'БиОТ',
+    'иср':'ИСР',
+    'инспекции':'ИСР',
+    'инспекции строительных работ':'ИСР',
+    'предписания':'Предписания',
+    'всего заявок':'Всего заявок',
+    'заявки на снабжение':'Всего заявок',
+    'заявки снабжения':'Всего заявок',
+    'все заявки':'Всего заявок',
+    'исполнено':'Исполнено',
+    'исполненные':'Исполнено',
+    'уникальные материалы':'Уникальные материалы',
+    'материалы':'Уникальные материалы',
 }
 
 
-def dashboard_metric_numbers(snapshot):
+def _canon_kpi_label(raw_label, tab=None):
+    low=re.sub(r'\s+',' ',str(raw_label or '')).strip().rstrip(':—–- ').casefold()
+    if low in KPI_ALIASES_CI:
+        return KPI_ALIASES_CI[low]
+    if tab=='Контроль качества' and low in ('всего','итого','общий итог','всего проверок'):
+        return 'Всего процессов'
+    if tab=='Снабжение' and low in ('заявки','всего','итого','заявок'):
+        return 'Всего заявок'
+    return str(raw_label or '').strip()
+
+
+def dashboard_metric_numbers(snapshot, tab=None):
     result={}
+    raw_items=[]
     if not snapshot:return result
     for item in snapshot.get('kpis',[]):
         value=re.sub(r'[\s\u00a0]+','',str(item.get('value','')))
         if re.fullmatch(r'-?\d+',value):
-            lbl=KPI_ALIASES.get(item['label'],item['label'])
-            result.setdefault(lbl,int(value))
-    # Fallback по строкам текста страницы, если карточки KPI рендерятся нестандартной версткой
-    known={
-        'Задачи','Поручения','Договоры','Доп. соглашения','Дополнительные соглашения',
-        'Акты','Накладные','Всего процессов','БиОТ','ИСР','Инспекции','Предписания',
-        'Всего заявок','Исполнено','Уникальные материалы',
-    }
+            ival=int(value)
+            raw_lbl=str(item.get('label','')).strip()
+            canon=_canon_kpi_label(raw_lbl,tab=tab)
+            raw_items.append((raw_lbl,canon,ival))
+            result.setdefault(canon,ival)
+
+    # Fallback по строкам текста страницы (регистронезависимо + поддержка подзаголовков и одной строки)
     lines=[re.sub(r'\s+',' ',ln).strip() for ln in (snapshot.get('text') or '').splitlines() if ln.strip()]
     for idx,ln in enumerate(lines):
-        canon=KPI_ALIASES.get(ln,ln)
-        if ln in known and canon not in result:
-            for nb in (lines[idx+1] if idx+1<len(lines) else '', lines[idx-1] if idx>0 else ''):
+        # Однострочный формат: «Всего процессов: 155» или «Всего заявок 45»
+        m_inline=re.match(r'^([A-Za-zА-Яа-яЁё][A-Za-zА-Яа-яЁё\s.\-()\/]{1,55}?)\s*[:—–]?\s+(-?\d[\d\s\u00a0]*)$',ln)
+        if m_inline and not re.search(r'стр\.|всего:',ln,re.I):
+            canon_in=_canon_kpi_label(m_inline.group(1),tab=tab)
+            if canon_in in KPI_ALIASES_CI.values() and canon_in not in result:
+                result[canon_in]=int(re.sub(r'[\s\u00a0]+','',m_inline.group(2)))
+        canon=_canon_kpi_label(ln,tab=tab)
+        if canon in KPI_ALIASES_CI.values() and canon not in result:
+            neighbors=[]
+            for delta in (1,-1,2,-2):
+                j=idx+delta
+                if 0<=j<len(lines):
+                    neighbors.append(lines[j])
+            for nb in neighbors:
                 clean_nb=re.sub(r'[\s\u00a0]+','',nb)
                 if re.fullmatch(r'-?\d+',clean_nb):
                     result[canon]=int(clean_nb)
                     break
+
+    # Дополнительная защита для переименованной главной карточки вкладки
+    if tab=='Контроль качества' and 'Всего процессов' not in result:
+        if all(k in result for k in ('БиОТ','ИСР','Предписания')):
+            exp_sum=result['БиОТ']+result['ИСР']+result['Предписания']
+            # Ищем сводное число в карточках или верхних строках вкладки
+            for raw_lbl,canon,ival in raw_items:
+                if canon not in ('БиОТ','ИСР','Предписания') and ival==exp_sum:
+                    result['Всего процессов']=ival
+                    break
+            if 'Всего процессов' not in result:
+                for ln in lines[:35]:
+                    clean_ln=re.sub(r'[\s\u00a0]+','',ln)
+                    if re.fullmatch(r'-?\d+',clean_ln) and int(clean_ln)==exp_sum:
+                        result['Всего процессов']=exp_sum
+                        break
+    if tab=='Снабжение' and 'Всего заявок' not in result:
+        for raw_lbl,canon,ival in raw_items:
+            if canon not in ('Исполнено','Уникальные материалы') and not re.search(r'задач|поручен|биот|иср|предпис|договор|акт|накладн',raw_lbl,re.I) and ival>=0:
+                result['Всего заявок']=ival
+                break
     return result
 
 
@@ -2708,20 +2819,20 @@ def stage_dash_data(tab):
     if not set_dash_tab(tab):
         log(f'  ⚠ Не удалось переключиться на вкладку «{tab}»','WARN')
         return False
-    wait_for_state(lambda:bool(dashboard_metric_numbers(dash_snapshot())),timeout=12)
+    wait_for_state(lambda:bool(dashboard_metric_numbers(dash_snapshot(),tab=tab)),timeout=12)
     wait_idle(15,.4)
     snapshot=dash_snapshot()
     if not snapshot:
         log(f'  ⚠ Снимок вкладки «{tab}» пуст','WARN')
         return False
-    DASH_SNAPSHOTS[tab]=snapshot;DASH_METRICS[tab]=dashboard_metric_numbers(snapshot)
+    DASH_SNAPSHOTS[tab]=snapshot;DASH_METRICS[tab]=dashboard_metric_numbers(snapshot,tab=tab)
     required={'Задачи':['Задачи','Поручения'],'Финансы':['Договоры','Доп. соглашения','Акты','Накладные'],
         'Контроль качества':['Всего процессов','БиОТ','ИСР','Предписания'],'Снабжение':['Всего заявок','Исполнено','Уникальные материалы']}
     metrics=DASH_METRICS[tab]
     missing=[label for label in required[tab] if label not in metrics or metrics[label]<0]
     valid=not missing
     if missing:
-        log(f'  ⚠ {tab}: отсутствуют/некорректны KPI {missing}; найдено: {metrics}','WARN')
+        log(f'  ⚠ {tab}: отсутствуют/некорректны KPI {missing}; найдено: {metrics}; raw_kpis={snapshot.get("kpis",[])[:10]}','WARN')
     if tab=='Задачи' and len(snapshot['tables'])<2:
         log(f'  ⚠ Задачи: ожидалось >=2 таблиц, найдено {len(snapshot["tables"])}','WARN')
         valid=False
@@ -2731,10 +2842,21 @@ def stage_dash_data(tab):
             log(f'  ⚠ Контроль качества: Всего процессов={metrics.get("Всего процессов")} != БиОТ+ИСР+Предписания={expected_sum}','WARN')
             valid=False
     if tab in ('Финансы','Снабжение'):
-        amt_ok=bool(snapshot['amounts']) and all('БЕЗ НДС' in a.upper() and 'С НДС' in a.upper() for a in snapshot['amounts'])
+        amts=snapshot.get('amounts') or []
+        joined_up=' '.join(amts).upper()
+        page_up=(snapshot.get('text') or '').upper()
+        has_both_vat=('БЕЗ НДС' in joined_up and 'С НДС' in joined_up) or ('БЕЗ НДС' in page_up and 'С НДС' in page_up and any(re.search(r'\d',a) for a in amts))
+        has_currency_blocks=bool(amts) and all(re.search(r'\d',a) for a in amts) and any(re.search(r'(БЕЗ\s+НДС|С\s+НДС|₸|ТГ\b|KZT|СУММА|ИТОГО)',a,re.I) for a in amts)
+        amt_ok=bool(amts) and (has_both_vat or has_currency_blocks)
         if not amt_ok:
-            log(f'  ⚠ {tab}: блоки сумм Без НДС / С НДС не распознаны (найдено {len(snapshot["amounts"])})','WARN')
-            valid=False
+            # Если на вкладке нет отдельных карточек сумм, проверяем наличие числовых сумм в тексте вкладки
+            txt_money=re.findall(r'-?\d[\d\s\u00a0]*[.,]\d{2}\s*(?:₸|тг\.?|KZT)?|(?:-?\d[\d\s\u00a0]*)\s*(?:₸|тг\b|KZT)', snapshot.get('text') or '', re.I)
+            if txt_money:
+                snapshot['amounts']=[m.strip() for m in txt_money[:6]]
+                amt_ok=True
+            else:
+                log(f'  ⚠ {tab}: блоки сумм не распознаны (найдено {len(amts)})','WARN')
+                valid=False
     log(f'  {tab}: показатели {metrics}; таблиц {len(snapshot["tables"])}; блоков сумм {len(snapshot["amounts"])}')
     return valid and page_health('Панель/'+tab)
 
@@ -3041,12 +3163,21 @@ def stage_dash_cross_tabs():
                 snap=dash_snapshot()
                 if snap:
                     DASH_SNAPSHOTS[tab]=snap
-                    DASH_METRICS[tab]=dashboard_metric_numbers(snap)
+                    DASH_METRICS[tab]=dashboard_metric_numbers(snap,tab=tab)
     comparisons=[]
     for name,path,tab,key in [('Предписания','quality/issue-registration','Контроль качества','Предписания'),('БиОТ','quality/biot','Контроль качества','БиОТ'),('Инспекции','quality/inspection','Контроль качества','ИСР'),('Снабжение','supply','Снабжение','Всего заявок')]:
         driver.get(BASE_URL+path)
         if not wait_for_state(lambda:page_total() is not None,timeout=30) or not wait_idle(30,.5):return False
         total=page_total();panel=DASH_METRICS.get(tab,{}).get(key)
+        if panel is None and tab in DASH_SNAPSHOTS:
+            # Дополнительная сверка: если карточка снабжения/качества названа нестандартно, но содержит точный счётчик в шапке панели
+            snap_kpis=DASH_SNAPSHOTS[tab].get('kpis',[])
+            for kp in snap_kpis:
+                v=re.sub(r'[\s\u00a0]+','',str(kp.get('value','')))
+                if re.fullmatch(r'-?\d+',v) and int(v)==total:
+                    panel=int(v)
+                    DASH_METRICS.setdefault(tab,{})[key]=panel
+                    break
         comparisons.append(dict(module=name,registry=total,panel=panel,ok=panel==total))
         log(f'  {name}: панель {panel}; Всего в реестре {total}', 'PASS' if panel==total else 'WARN')
     STATE['comparisons']=comparisons

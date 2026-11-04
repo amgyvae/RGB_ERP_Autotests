@@ -1480,7 +1480,10 @@ def nav_finance(item, url_part, url):
 
 
 def money(s):
-    return float(s.replace("\u00a0", "").replace(" ", "").replace("\n", "").replace(",", "."))
+    raw = str(s or "").replace("\u00a0", "").replace(" ", "").replace("\n", "").replace("\t", "")
+    raw = re.sub(r"(?:₸|тг\.?|KZT)", "", raw, flags=re.I).strip().replace(",", ".")
+    m = re.search(r"-?\d+(?:\.\d+)?", raw)
+    return float(m.group(0)) if m else 0.0
 
 
 def fmt(x):
@@ -1558,7 +1561,37 @@ def parse_articles(text, acc):
 
 def parse_cards(text):
     out = {}
-    num_pat = r"(-?[\d\s\u00a0]+(?:[.,]\d{1,2})?)"
+    num_pat = r"(-?\d[\d\s\u00a0]*(?:[.,]\d{1,2})?)"
+    money_line_re = re.compile(r"^\s*(-?\d[\d\s\u00a0]*(?:[.,]\d{1,2})?)\s*(?:₸|тг\.?|KZT)?\s*$", re.I)
+
+    def _extract_pair_from_block(blk_text):
+        lines = [ln.strip() for ln in blk_text.splitlines() if ln.strip()]
+        idx_wo = next((i for i, ln in enumerate(lines) if re.fullmatch(r"(?:сумма\s+|итого\s+)?без\s+ндс:?", ln, re.I)), None)
+        idx_w = next((i for i, ln in enumerate(lines) if re.fullmatch(r"(?:сумма\s+|итого\s+)?с\s+ндс:?", ln, re.I)), None)
+        if idx_wo is not None and idx_w is not None:
+            # Вариант A: число стоит строкой ПОСЛЕ подписи («БЕЗ НДС» -> «100 000,00 ₸»)
+            if idx_wo + 1 < len(lines) and idx_w + 1 < len(lines):
+                ma = money_line_re.match(lines[idx_wo + 1])
+                mb = money_line_re.match(lines[idx_w + 1])
+                if ma and mb:
+                    return money(ma.group(1)), money(mb.group(1))
+            # Вариант B: число стоит строкой ПЕРЕД подписью («100 000,00 ₸» -> «БЕЗ НДС»)
+            if idx_wo > 0 and idx_w > 0:
+                ma = money_line_re.match(lines[idx_wo - 1])
+                mb = money_line_re.match(lines[idx_w - 1])
+                if ma and mb:
+                    return money(ma.group(1)), money(mb.group(1))
+        # Вариант C: подпись и число в одной строке или через пробел
+        m_wo = re.search(rf"БЕЗ\s+НДС[:\s]*{num_pat}", blk_text, re.I)
+        m_w = re.search(rf"(?<!БЕЗ\s)С\s+НДС[:\s]*{num_pat}", blk_text, re.I)
+        if m_wo and m_w:
+            return money(m_wo.group(1)), money(m_w.group(1))
+        m_wo2 = re.search(rf"{num_pat}\s*(?:₸|тг\.?|KZT)?\s*БЕЗ\s+НДС", blk_text, re.I)
+        m_w2 = re.search(rf"{num_pat}\s*(?:₸|тг\.?|KZT)?\s*(?<!БЕЗ\s)С\s+НДС", blk_text, re.I)
+        if m_wo2 and m_w2:
+            return money(m_wo2.group(1)), money(m_w2.group(1))
+        return None
+
     # 1. Точный разбор карточек сводки через DOM (не зависит от знака ₸ и порядка подписи/суммы)
     try:
         dom_blocks = driver.execute_script(r"""
@@ -1587,19 +1620,16 @@ def parse_cards(text):
                 continue
             if not re.search(rf"(?:^|\s){re.escape(name)}(?:\s|:|$)", blk, re.I):
                 continue
-            m_wo = re.search(rf"БЕЗ\s+НДС[:\s]*{num_pat}|{num_pat}\s*(?:₸|тг\.?|KZT)?\s*БЕЗ\s+НДС", blk, re.I)
-            m_w = re.search(rf"(?<!БЕЗ\s)С\s+НДС[:\s]*{num_pat}|{num_pat}\s*(?:₸|тг\.?|KZT)?\s*(?<!БЕЗ\s)С\s+НДС", blk, re.I)
-            if m_wo and m_w:
-                v_wo = m_wo.group(1) or m_wo.group(2)
-                v_w = m_w.group(1) or m_w.group(2)
-                out[name] = (money(v_wo), money(v_w))
+            pair = _extract_pair_from_block(blk)
+            if pair is not None:
+                out[name] = pair
 
     # 2. Текстовый разбор (с поддержкой валюты ₸, двоеточий и целых чисел)
     for name in ("Итого", "Услуги", "Материалы"):
         if name in out:
             continue
         mm = re.search(
-            rf"{re.escape(name)}\b[\s\S]{{0,180}}?БЕЗ\s+НДС[:\s]*{num_pat}\s*(?:₸|тг\.?|KZT)?[\s\S]{{0,80}}?С\s+НДС[:\s]*{num_pat}",
+            rf"{re.escape(name)}\b[\s\S]{{0,180}}?БЕЗ\s+НДС[:\s]*{num_pat}\s*(?:₸|тг\.?|KZT)?[\s\S]{{0,80}}?(?<!БЕЗ\s)С\s+НДС[:\s]*{num_pat}",
             text,
             re.I,
         )

@@ -106,13 +106,25 @@ def init_driver():
     driver.implicitly_wait(0)
 
 
-# Все процессы выполняются строго под первым аккаунтом (RGB_ACCOUNT1_LOGIN / jyktmargyplay2@gmail.com)
+# Основной аккаунт (автор и согласующий в маршруте — Sh Margulan Ju)
 login_val = env("RGB_ACCOUNT1_LOGIN", "jyktmargyplay2@gmail.com")
 pass_val = env("RGB_ACCOUNT1_PASSWORD", env("RGB_ACCOUNT1_PASSWORD_ALT", "12341234"))
 REVIEWER_LOGIN = login_val
 REVIEWER_PASS = pass_val
-SECOND_LOGIN = login_val
-SECOND_PASS = pass_val
+
+# Утверждающий — 2-й / 3-й аккаунт (автор сметы не может быть её утверждающим)
+SECOND_LOGIN = "aldazarovdias@gmail.com"
+SECOND_PASS = "12341234"
+THIRD_LOGIN = "dias.aldazharov@bk.ru"
+THIRD_PASS = "h7WxqKIR"
+ALT_UTV_LOGIN = "marshar244@gmail.com"
+ALT_UTV_PASS = "12341234"
+
+UTV_CANDIDATES = [
+    (SECOND_LOGIN, SECOND_PASS, ["алдажаров", "алдазаров", "диас"], "Алдажаров"),
+    (THIRD_LOGIN, THIRD_PASS, ["бейсембаев", "куаныш"], "Бейсембаев"),
+    (ALT_UTV_LOGIN, ALT_UTV_PASS, ["талгат", "ерланович"], "Талгат"),
+]
 
 BASE_URL = "https://testportal.rgbgroup.kz/"
 ESTIMATES_URL = BASE_URL + "estimates"
@@ -122,8 +134,8 @@ STAMP = datetime.now().strftime('%d%m-%H%M%S')
 ESTIMATE_NAME = f"AutoTest смета {STAMP}"
 PROJECT_QUERY = "Flagman"
 APPROVER_QUERY = env("RGB_APPROVER_QUERY", 'Margulan')
-UTV_QUERY = env("RGB_UTV_QUERY", 'Margulan')
-UTV_KEYS = ['sh margulan ju', 'margulan', 'маргулан', 'талгат ерланович', 'талгат', 'ерланович', 'алдажаров диас андреевич', 'алдaжаров диасс андреевичч', 'ерлан талгатович']
+UTV_QUERY = "Алдажаров"
+UTV_KEYS = ['алдажаров диас андреевич', 'алдажаров', 'диас', 'бейсембаев куаныш', 'бейсембаев', 'куаныш', 'талгат ерланович', 'талгат', 'ерланович']
 MAX_DUP_TRIES = 40                   # сколько смет для дублирования перебирать
 
 # Названия кнопок статусных действий (TODO VERIFY)
@@ -997,67 +1009,76 @@ def is_login_page():
 
 def login_with(login_value, password_value):
     global CURRENT_LOGIN
-    login_value = "jyktmargyplay2@gmail.com"
-    password_value = "12341234"
+    CURRENT_LOGIN = None
     log(f"  Логин под: {login_value}")
-    if not is_login_page():
-        driver.get(BASE_URL)
-        time.sleep(3)
-        dismiss_news_popup(wait=1)
-    try:
-        WebDriverWait(driver, WAIT).until(EC.visibility_of_element_located(
-            (By.XPATH, "//input[@type='password']")))
-    except Exception:
-        driver.get(BASE_URL)
+    for sub_try in range(3):
+        if not is_login_page():
+            driver.get(BASE_URL)
+            time.sleep(2)
+            dismiss_news_popup(wait=1)
         try:
-            WebDriverWait(driver, 10).until(EC.visibility_of_element_located(
+            WebDriverWait(driver, WAIT).until(EC.visibility_of_element_located(
                 (By.XPATH, "//input[@type='password']")))
         except Exception:
-            return False
-    login_field = None
-    for xp in ["//input[contains(@placeholder,'огин')]", "//input[@name='username' or @id='username']",
-               "//input[contains(@placeholder,'Login')]", "//input[@type='email']",
-               "//input[@type='text'][1]"]:
+            if not is_login_page() and bool(find_buttons(["Выйти"])):
+                CURRENT_LOGIN = login_value
+                return True
+            driver.get(BASE_URL)
+            try:
+                WebDriverWait(driver, 12).until(EC.visibility_of_element_located(
+                    (By.XPATH, "//input[@type='password']")))
+            except Exception:
+                continue
+        login_field = None
+        for xp in ["//input[contains(@placeholder,'огин')]", "//input[@name='username' or @id='username']",
+                   "//input[contains(@placeholder,'Login')]", "//input[@type='email']",
+                   "//input[@type='text'][1]"]:
+            try:
+                vis = [f for f in driver.find_elements(By.XPATH, xp)
+                       if f.is_displayed() and f.is_enabled()]
+                if vis:
+                    login_field = vis[0]
+                    break
+            except Exception:
+                continue
+        pw_field = None
         try:
-            vis = [f for f in driver.find_elements(By.XPATH, xp)
+            vis = [f for f in driver.find_elements(By.XPATH, "//input[@type='password']")
                    if f.is_displayed() and f.is_enabled()]
-            if vis:
-                login_field = vis[0]
-                break
+            pw_field = vis[0] if vis else None
         except Exception:
+            pass
+        if not login_field or not pw_field:
+            time.sleep(1.5)
             continue
-    pw_field = None
-    try:
-        vis = [f for f in driver.find_elements(By.XPATH, "//input[@type='password']")
-               if f.is_displayed() and f.is_enabled()]
-        pw_field = vis[0] if vis else None
-    except Exception:
-        pass
-    if not login_field or not pw_field:
-        return False
-    login_field.clear()
-    login_field.send_keys(login_value)
-    pw_field.clear()
-    pw_field.send_keys(password_value)
-    for xp in ["//button[.//span[normalize-space(text())='Войти']]",
-               "//button[contains(., 'Войти')]", "//button[@type='submit']"]:
-        try:
-            vis = [b for b in driver.find_elements(By.XPATH, xp)
-                   if b.is_displayed() and b.is_enabled()]
-            if vis:
-                click_el(vis[0])
-                break
-        except Exception:
-            continue
-    if not wait_for_state(lambda: driver.current_url.startswith(BASE_URL)
-            and not is_login_page() and bool(page_text()), timeout=20):
-        log(f"  ⚠ Логин {login_value} не удался", "WARN")
-        return False
-    log(f"  ✓ Успешный вход: {login_value}", "PASS")
-    if not dismiss_news_popup(wait=3):
-        return False
-    CURRENT_LOGIN = login_value
-    return True
+        type_text(login_field, login_value)
+        type_text(pw_field, password_value)
+        clicked = False
+        for xp in ["//button[.//span[normalize-space(text())='Войти']]",
+                   "//button[contains(., 'Войти')]", "//button[@type='submit']"]:
+            try:
+                vis = [b for b in driver.find_elements(By.XPATH, xp)
+                       if b.is_displayed() and b.is_enabled()]
+                if vis:
+                    click_el(vis[0])
+                    clicked = True
+                    break
+            except Exception:
+                continue
+        if not clicked:
+            try:
+                pw_field.send_keys(Keys.ENTER)
+            except Exception:
+                pass
+        if wait_for_state(lambda: driver.current_url.startswith(BASE_URL)
+                and not is_login_page() and bool(page_text()), timeout=25):
+            log(f"  ✓ Успешный вход: {login_value}", "PASS")
+            dismiss_news_popup(wait=3)
+            CURRENT_LOGIN = login_value
+            return True
+        time.sleep(1.5)
+    log(f"  ⚠ Логин {login_value} не удался", "WARN")
+    return False
 
 
 KC_LOGOUT_URL = "https://auth.testportal.rgbgroup.kz/realms/rgb/protocol/openid-connect/logout"
@@ -1808,13 +1829,29 @@ def add_approver():
 
 
 # ==========================================
-# ЭТАП 6: УТВЕРЖДАЮЩИЙ
+# ЭТАП 6: УТВЕРЖДАЮЩИЙ (2-й или 3-й аккаунт — не автор сметы)
 # ==========================================
 def utv_assigned():
     txt = page_text()
-    m = re.search(r"утверждающий(.{0,400})", txt, re.S)
+    m = re.search(r"утверждающий(.{0,450})", txt, re.S)
     seg = m.group(1) if m else ""
-    return any(w in seg for w in ("margulan", "маргулан", "талгат", "ерланович", "алдажаров", "диас", "ерлан", "бейсембаев")) and "не назначен" not in seg and "выберите утверждающего" not in seg
+    if "не назначен" in seg or "выберите утверждающего" in seg:
+        return False
+    return any(w in seg for w in ("алдажаров", "алдазаров", "диас", "бейсембаев", "куаныш", "талгат", "ерланович", "ерлан", "margulan", "маргулан"))
+
+
+def _utv_inline_trigger():
+    try:
+        for xp in [
+            "//button[contains(@class,'ui-select__trigger')][contains(normalize-space(.),'тверждающего')]",
+            "//*[normalize-space(text())='Утверждающий']/following::button[contains(@class,'ui-select__trigger')][1]",
+        ]:
+            for t in driver.find_elements(By.XPATH, xp):
+                if t.is_displayed():
+                    return t
+    except Exception:
+        pass
+    return None
 
 
 def add_approver_final():
@@ -1824,12 +1861,10 @@ def add_approver_final():
         return True
     btn = None
     for xp in [
-        "//*[normalize-space(text())='Утверждающий']/following::button[normalize-space(.)='Добавить'][1]",
-        "//*[contains(normalize-space(text()),'Утверждающий')]/following::*[self::button or self::a][contains(normalize-space(.),'Добавить')][1]",
-        "//*[contains(normalize-space(text()),'Утверждающий не назначен')]"
-        "/following::*[self::button or self::a][normalize-space(.)='Добавить'][1]",
-        "//*[contains(normalize-space(text()),'Утверждающий не назначен')]"
-        "/following::*[normalize-space(text())='Добавить'][1]",
+        "//*[normalize-space(text())='Утверждающий']/ancestor::*[contains(@class,'card') or self::section or self::div][1]//button[contains(normalize-space(.),'Добавить')]",
+        "//*[normalize-space(text())='Утверждающий']/following::button[contains(normalize-space(.),'Добавить')][1]",
+        "//*[contains(normalize-space(text()),'Утверждающий не назначен')]/following::*[self::button or self::a][contains(normalize-space(.),'Добавить')][1]",
+        "//*[contains(normalize-space(text()),'Утверждающий не назначен')]/following::*[normalize-space(text())='Добавить'][1]",
     ]:
         try:
             for b in driver.find_elements(By.XPATH, xp):
@@ -1840,44 +1875,122 @@ def add_approver_final():
             pass
         if btn:
             break
-    if not btn:
+    if not btn and _utv_inline_trigger() is None:
         log("  • Утверждающий уже задан либо кнопка 'Добавить' скрыта", "INFO")
         return utv_assigned()
-    click_el(btn)
-    modal = wait_modal("Утверждающий", 8)
-    if not modal:
-        log("  ⚠ Модалка 'Утверждающий' не открылась", "WARN")
-        return False
+    if btn:
+        scroll_to(btn)
+        click_el(btn)
+        time.sleep(1.2)
+
+    modal = wait_modal("Утверждающий", 5)
     trg = None
-    try:
-        ts = [t for t in modal.find_elements(
-            By.XPATH, ".//button[contains(@class,'ui-select__trigger')] | .//div[contains(@class,'ui-select__trigger')]") if t.is_displayed()]
-        trg = ts[0] if ts else None
-    except Exception:
-        pass
-    panel = open_ui(trg)
-    picked = select_in_panel(panel, keywords=["sh margulan ju", "margulan", "маргулан"], search="Margulan") if panel else None
-    if not picked and panel:
-        s = panel_search(panel)
-        if s:
-            type_text(s, "")
-            time.sleep(1.0)
-        picked = select_in_panel(panel, keywords=UTV_KEYS + ["талгат", "ерланович", "алдажаров", "диас", "ерлан", "бейсембаев"])
-    if not picked and panel:
-        picked = select_in_panel(panel, index=0)
-    if not picked:
-        log("  ⚠ Утверждающий не выбран", "WARN")
-        close_panels()
-        close_modal_soft(modal)
+    for _ in range(10):
+        if modal is None:
+            modal = find_modal("Утверждающий")
+        if modal is not None:
+            try:
+                ts = [t for t in modal.find_elements(
+                    By.XPATH, ".//button[contains(@class,'ui-select__trigger')] | .//div[contains(@class,'ui-select__trigger')] | .//*[@role='combobox']") if t.is_displayed()]
+                if ts:
+                    trg = ts[0]
+                    break
+            except Exception:
+                pass
+        trg = _utv_inline_trigger()
+        if trg is not None:
+            break
+        time.sleep(0.5)
+
+    if trg is None:
+        log("  ⚠ Поле выбора утверждающего не открылось", "WARN")
+        shot("smeta_utv_no_trigger")
+        if modal:
+            close_modal_soft(modal)
         return False
-    log(f"  ✓ Утверждающий: {picked}", "PASS")
-    time.sleep(1)
-    save = modal_button(modal, ["Сохранить"])
+
+    picked = None
+    chosen_acc = None
+    # Автор сметы (Sh Margulan Ju) не может быть утверждающим — выбираем 2-й или 3-й аккаунт
+    for acc_login, acc_pass, kw_list, query in UTV_CANDIDATES:
+        close_panels()
+        panel = open_ui(trg)
+        if not panel:
+            continue
+        picked = select_in_panel(panel, keywords=kw_list, search=query, exclude=["margulan", "маргулан"])
+        if picked:
+            chosen_acc = (acc_login, acc_pass)
+            break
+
+    # Если поиск по фамилии не дал совпадений — открываем список заново без фильтра и выбираем любого доступного (кроме автора)
+    if not picked:
+        close_panels()
+        panel = open_ui(trg)
+        if panel:
+            s = panel_search(panel)
+            if s and (s.get_attribute("value") or "").strip():
+                set_native_value(s, "")
+                time.sleep(0.8)
+            opts = panel_options(panel)
+            log(f"  • Доступные утверждающие в списке ({len(opts)}): {[o['text'] for o in opts[:8]]}", "INFO")
+            for acc_login, acc_pass, kw_list, _ in UTV_CANDIDATES:
+                picked = select_in_panel(panel, keywords=kw_list, exclude=["margulan", "маргулан"])
+                if picked:
+                    chosen_acc = (acc_login, acc_pass)
+                    break
+            if not picked and opts:
+                for idx_opt, opt_item in enumerate(opts):
+                    low = opt_item["text"].lower()
+                    if "margulan" not in low and "маргулан" not in low and "нет данных" not in low:
+                        picked = select_in_panel(panel, index=idx_opt)
+                        if picked:
+                            break
+
+    if not picked:
+        log("  ⚠ Утверждающий не выбран (список пуст или недоступен)", "WARN")
+        shot("smeta_utv_not_picked")
+        close_panels()
+        if modal:
+            close_modal_soft(modal)
+        return False
+
+    if chosen_acc:
+        STATE["utv_account"] = chosen_acc
+    else:
+        low_p = picked.lower()
+        for acc_login, acc_pass, kw_list, _ in UTV_CANDIDATES:
+            if any(k in low_p for k in kw_list):
+                STATE["utv_account"] = (acc_login, acc_pass)
+                break
+    STATE["utv_name"] = picked
+    log(f"  ✓ Утверждающий выбран (2/3 аккаунт): {picked}", "PASS")
+    time.sleep(1.0)
+
+    save = modal_button(modal, ["Сохранить", "Добавить", "Применить"]) if modal else None
+    if save is None:
+        for xp in [
+            "//*[normalize-space(text())='Утверждающий']/following::button[normalize-space(.)='Сохранить'][1]",
+            "//button[normalize-space(.)='Сохранить']",
+        ]:
+            try:
+                bs = [b for b in driver.find_elements(By.XPATH, xp) if b.is_displayed() and b.is_enabled()]
+                if bs:
+                    save = bs[-1]
+                    break
+            except Exception:
+                pass
     if save:
         click_el(save)
-        wait_modal_closed("Утверждающий", 8)
-    time.sleep(2)
-    return True
+        if modal:
+            wait_modal_closed("Утверждающий", 8)
+    time.sleep(2.0)
+    driver.get(STATE["url"])
+    wait_for_state(smeta_card_ready)
+    ok = bool(wait_for_state(utv_assigned, timeout=8))
+    if not ok:
+        log("  ⚠ Утверждающий не сохранился в карточке", "WARN")
+        shot("smeta_utv_not_saved")
+    return ok
 
 
 # ==========================================
@@ -2349,50 +2462,68 @@ def stage_approve_main():
 
 
 def stage_confirm_by_talgat():
-    # Все процессы выполняются строго под первым аккаунтом (login_val / RGB_ACCOUNT1_LOGIN)
-    if not ensure_account(login_val, pass_val):
+    # Утверждение выполняется под 2-м или 3-м аккаунтом, который был назначен как Утверждающий
+    accounts_to_try = []
+    if STATE.get("utv_account"):
+        accounts_to_try.append(STATE["utv_account"])
+    for acc_l, acc_p, _, _ in UTV_CANDIDATES:
+        if (acc_l, acc_p) not in accounts_to_try:
+            accounts_to_try.append((acc_l, acc_p))
+
+    try:
+        for acc_l, acc_p in accounts_to_try:
+            if not ensure_account(acc_l, acc_p):
+                continue
+            driver.get(STATE["url"])
+            if not wait_for_state(smeta_card_ready, timeout=15):
+                continue
+            status = get_status()
+            if status and "утвержд" in status.lower():
+                log(f"  ✓ Смета уже утверждена ({acc_l}): {status}", "PASS")
+                return True
+            label = click_action(TO_CONFIRM)
+            if not label and click_text_deepest("Утвердить", "contains"):
+                label = "Утвердить"
+                time.sleep(3)
+            if not label:
+                # Fallback: поиск задачи утверждения в /tasks?tab=tasks под утверждающим аккаунтом
+                try:
+                    driver.get(BASE_URL + "tasks?tab=tasks")
+                    time.sleep(3)
+                    for r in driver.find_elements(By.XPATH, "//*[contains(normalize-space(.),'Утвердить') or contains(normalize-space(.),'смет') or contains(normalize-space(.),'Смет')]"):
+                        if r.is_displayed():
+                            click_el(r)
+                            time.sleep(2)
+                            label = click_action(TO_CONFIRM)
+                            if not label and click_text_deepest("Утвердить", "contains"):
+                                label = "Утвердить"
+                            if label:
+                                break
+                except Exception:
+                    pass
+            if label:
+                time.sleep(4)
+                driver.get(STATE["url"])
+                wait_for_state(smeta_card_ready)
+                after_st = get_status()
+                log(f"  Статус после утверждения ({acc_l}): {after_st}", "PASS")
+                return True
+            # Если смета только в этом аккаунте не дала кнопку, пробуем следующий кандидат только если utv_account не был зафиксирован
+            if STATE.get("utv_account") == (acc_l, acc_p):
+                driver.get(STATE["url"])
+                wait_for_state(smeta_card_ready)
+                st_now = get_status()
+                if st_now and "утвержд" in st_now.lower():
+                    log(f"  ✓ Смета утверждена ({acc_l}): {st_now}", "PASS")
+                    return True
+        log(f"  ⚠ Кнопка {TO_CONFIRM} не найдена под аккаунтом утверждающего ({STATE.get('utv_name') or SECOND_LOGIN})", "WARN")
+        shot("smeta_confirm_no_btn")
         return False
-    driver.get(STATE["url"])
-    if not wait_for_state(smeta_card_ready):
-        return False
-    status = get_status()
-    if status and "утвержд" in status.lower():
-        log(f"  ✓ Смета уже утверждена ({login_val}): {status}", "PASS")
-        return True
-    label = click_action(TO_CONFIRM)
-    if not label and click_text_deepest("Утвердить", "contains"):
-        label = "Утвердить"
-        time.sleep(3)
-    if not label:
-        # Fallback: поиск задачи утверждения в /tasks?tab=tasks под первым аккаунтом
+    finally:
         try:
-            driver.get(BASE_URL + "tasks?tab=tasks")
-            time.sleep(3)
-            for r in driver.find_elements(By.XPATH, "//*[contains(normalize-space(.),'Утвердить')]"):
-                if r.is_displayed():
-                    click_el(r)
-                    time.sleep(2)
-                    label = click_action(TO_CONFIRM)
-                    if not label and click_text_deepest("Утвердить", "contains"):
-                        label = "Утвердить"
-                    if label:
-                        break
+            ensure_account(login_val, pass_val)
         except Exception:
             pass
-    if label:
-        time.sleep(4)
-        driver.refresh()
-        wait_for_state(smeta_card_ready)
-        log(f"  Статус после утверждения ({login_val}): {get_status()}", "PASS")
-        return True
-
-    goto_card()
-    status = get_status()
-    if status and any(w in status.lower() for w in ("утвержд", "согласован", "на согласовании", "на утверждении")):
-        log(f"  ✓ Проверка утверждения в первом аккаунте ({login_val}), текущий статус: {status}", "PASS")
-        return True
-    log(f"  ⚠ Кнопки {TO_CONFIRM} не найдены под основным аккаунтом", "WARN")
-    return False
 
 
 
@@ -2463,8 +2594,8 @@ def run():
         # Этап 10: Маршрут согласования
         step("Смета: Маршрут согласования: Sh Margulan Ju", add_approver)
 
-        # Этап 11: Утверждающий
-        step("Смета: Утверждающий: Sh Margulan Ju", add_approver_final)
+        # Этап 11: Утверждающий (2-й/3-й аккаунт)
+        step("Смета: Утверждающий: Алдажаров Диас", add_approver_final)
 
         # Этап 12: Отрицательный тест - пустая строка
         step('Смета: Отрицательная  пустая строка сметы', stage_negative_empty_line)
@@ -2492,11 +2623,11 @@ def run():
         # Этап 19: Отправка на согласование
         step("Смета: Отправить на согласование", stage_send_for_approval)
 
-        # Этап 20: Согласование
+        # Этап 20: Согласование (основной аккаунт из маршрута)
         step("Смета: Согласовать (Sh Margulan Ju)", stage_approve_main)
 
-        # Этап 21: Утверждение
-        step("Смета: Утвердить (Sh Margulan Ju)", stage_confirm_by_talgat)
+        # Этап 21: Утверждение (2-й/3-й аккаунт — утверждающий)
+        step("Смета: Утвердить (Алдажаров Диас)", stage_confirm_by_talgat)
     except Exception as e:
         RUN_ERROR = f"{type(e).__name__}: {e}"
         log(f"КРИТИЧЕСКАЯ ОШИБКА: {e}", "FAIL")

@@ -129,6 +129,8 @@ pass_val = env("RGB_ACCOUNT1_PASSWORD", env("RGB_ACCOUNT1_PASSWORD_ALT", "123412
 BASE_URL = "https://testportal.rgbgroup.kz/"
 TASKS_URL = "https://testportal.rgbgroup.kz/?tab=tasks"
 WAIT = 15
+MODULE_START_TS = time.time()
+FATAL_ABORT_REASON = ""
 
 # ==========================================
 # TELEGRAM
@@ -3169,6 +3171,12 @@ def save_report():
     total_checks = len(checklist_results)
     passed_checks = sum(bool(item["passed"]) for item in checklist_results)
     failed_items = [item for item in checklist_results if not item["passed"]]
+    duration_sec = max(0.0, round(time.time() - MODULE_START_TS, 1))
+    mins_d, secs_d = divmod(int(round(duration_sec)), 60)
+    dur_human = f"{mins_d} мин {secs_d} сек" if mins_d else f"{secs_d} сек"
+    web_only_flag = os.environ.get("RGB_WEB_ONLY", "1").strip().lower() not in ("0", "false", "no")
+    ecp_badge = "БЕЗ ЭЦП" if web_only_flag else "С ЭЦП"
+    all_stages_ok = bool(checklist_results and not failed_items and not FATAL_ABORT_REASON)
 
     try:
         import json as _json
@@ -3184,12 +3192,14 @@ def save_report():
             })
         suite_payload = {
             "script": "zadashi.py",
-            "label": "Мои задачи",
+            "label": "Задачи и поручения",
             "passed_checks": int(passed_checks),
             "total_checks": int(total_checks),
             "skipped_count": 0,
-            "ok": bool(checklist_results and not failed_items and f == 0),
-            "error": "",
+            "duration_sec": duration_sec,
+            "ecp_mode": ecp_badge,
+            "ok": all_stages_ok,
+            "error": FATAL_ABORT_REASON,
             "failures": suite_failures,
         }
         (LOGS_DIR / "suite_module_zadashi.json").write_text(
@@ -3198,12 +3208,22 @@ def save_report():
     except Exception:
         pass
 
-    if checklist_results and not failed_items and f == 0:
-        lines = [f"✅ <b>Автотест: Мои задачи — УСПЕШНО</b> ({passed_checks}/{total_checks})", ""]
+    if all_stages_ok:
+        lines = [
+            f"✅ <b>Автотест: Задачи и поручения — УСПЕШНО</b> ({passed_checks}/{total_checks})",
+            f"⏱ <b>Длительность:</b> {dur_human} · 🔐 <b>Режим:</b> {ecp_badge}",
+            "",
+        ]
     else:
-        emoji = "🔥" if failed_items else "⚠️"
-        title = "ЕСТЬ ОШИБКИ" if failed_items else "ВЫПОЛНЕН НЕ ПОЛНОСТЬЮ"
-        lines = [f"{emoji} <b>Автотест: Мои задачи — {title}</b> ({passed_checks}/{total_checks} успешно)", ""]
+        emoji = "🔥" if (failed_items or FATAL_ABORT_REASON) else "⚠️"
+        title = "ЕСТЬ ОШИБКИ" if (failed_items or FATAL_ABORT_REASON) else "ВЫПОЛНЕН НЕ ПОЛНОСТЬЮ"
+        lines = [
+            f"{emoji} <b>Автотест: Задачи и поручения — {title}</b> ({passed_checks}/{total_checks} успешно)",
+            f"⏱ <b>Длительность:</b> {dur_human} · 🔐 <b>Режим:</b> {ecp_badge}",
+        ]
+        if FATAL_ABORT_REASON:
+            lines.append(f"⚠️ <b>Прерывание:</b> <i>{FATAL_ABORT_REASON[:200]}</i>")
+        lines.append("")
 
     if checklist_results:
         lines.append("<b>Этапы сценария:</b>")
@@ -3326,6 +3346,8 @@ try:
     save_report()
 
 except SystemExit as e:
-    log(f"Остановка: {e}", "FAIL"); save_report()
+    FATAL_ABORT_REASON = f"Остановка: {e}"
+    log(FATAL_ABORT_REASON, "FAIL"); save_report()
 except Exception as e:
-    log(f"Крит. ошибка: {e}", "FAIL"); shot("critical"); save_report()
+    FATAL_ABORT_REASON = f"Крит. ошибка: {e}"
+    log(FATAL_ABORT_REASON, "FAIL"); shot("critical"); save_report()
