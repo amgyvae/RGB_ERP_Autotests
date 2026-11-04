@@ -112,18 +112,18 @@ pass_val = env("RGB_ACCOUNT1_PASSWORD", env("RGB_ACCOUNT1_PASSWORD_ALT", "123412
 REVIEWER_LOGIN = login_val
 REVIEWER_PASS = pass_val
 
-# Утверждающий — 2-й / 3-й аккаунт (автор сметы не может быть её утверждающим)
-SECOND_LOGIN = "aldazarovdias@gmail.com"
-SECOND_PASS = "12341234"
+# Утверждающий — Талгат Ерланович / Ерланович Талгат (резерв: Ерлан Талгатович)
+SECOND_LOGIN = env("RGB_TALGAT_LOGIN", "marshar244@gmail.com")
+SECOND_PASS = env("RGB_TALGAT_PASSWORD", "12341234")
+ERLAN_LOGIN = env("RGB_ERLAN_LOGIN", "hhuh8918@gmail.com")
+ERLAN_PASS = env("RGB_ERLAN_PASSWORD", "12341234")
 THIRD_LOGIN = "dias.aldazharov@bk.ru"
 THIRD_PASS = "h7WxqKIR"
-ALT_UTV_LOGIN = "marshar244@gmail.com"
-ALT_UTV_PASS = "12341234"
 
 UTV_CANDIDATES = [
-    (SECOND_LOGIN, SECOND_PASS, ["алдажаров", "алдазаров", "диас"], "Алдажаров"),
+    (SECOND_LOGIN, SECOND_PASS, ["ерланович талгат", "талгат ерланович", "талгат", "ерланович"], "Талгат"),
+    (ERLAN_LOGIN, ERLAN_PASS, ["ерлан талгатович", "талгатович ерлан", "талгатович"], "Ерлан"),
     (THIRD_LOGIN, THIRD_PASS, ["бейсембаев", "куаныш"], "Бейсембаев"),
-    (ALT_UTV_LOGIN, ALT_UTV_PASS, ["талгат", "ерланович"], "Талгат"),
 ]
 
 BASE_URL = "https://testportal.rgbgroup.kz/"
@@ -134,14 +134,14 @@ STAMP = datetime.now().strftime('%d%m-%H%M%S')
 ESTIMATE_NAME = f"AutoTest смета {STAMP}"
 PROJECT_QUERY = "Flagman"
 APPROVER_QUERY = env("RGB_APPROVER_QUERY", 'Margulan')
-UTV_QUERY = "Алдажаров"
-UTV_KEYS = ['алдажаров диас андреевич', 'алдажаров', 'диас', 'бейсембаев куаныш', 'бейсембаев', 'куаныш', 'талгат ерланович', 'талгат', 'ерланович']
+UTV_QUERY = "Талгат"
+UTV_KEYS = ['ерланович талгат', 'талгат ерланович', 'талгат', 'ерланович', 'ерлан талгатович', 'талгатович', 'бейсембаев куаныш', 'бейсембаев']
 MAX_DUP_TRIES = 40                   # сколько смет для дублирования перебирать
 
 # Названия кнопок статусных действий (TODO VERIFY)
 TO_SEND = ["Отправить на согласование"]
 TO_APPROVE = ["Согласовать", "Согласовать смету", "Согласовать этап", "Согласование", "Принять", "Одобрить"]
-TO_CONFIRM = ["Утвердить", "Утвердить смету", "Утверждение"]
+TO_CONFIRM = ["Утвердить", "Утвердить смету", "Подписать и утвердить", "Утверждение", "Подписать"]
 
 # Кнопку «Удалить» нажимать ОПАСНО (удалит созданную смету).
 # True — нажмёт и сразу нажмёт «Отмена» в подтверждении.
@@ -251,9 +251,46 @@ def dismiss_news_popup(wait=0):
             return True
         time.sleep(min(0.2, remaining))
 
+def _account_header_tokens(login_value):
+    low = (login_value or "").lower()
+    if "jyktmargyplay" in low or "margulan" in low:
+        return ["sh margulan ju", "margulan", "маргулан"]
+    if "marshar244" in low:
+        return ["талгат", "ерланович"]
+    if "hhuh8918" in low:
+        return ["ерлан талгатович", "талгатович"]
+    if "dias.aldazharov@bk.ru" in low:
+        return ["бейсембаев", "куаныш"]
+    if "aldazarovdias" in low:
+        return ["алдажаров", "алдазаров"]
+    return []
+
+
+def _is_expected_user_active(login_value):
+    if is_login_page():
+        return False
+    tokens = _account_header_tokens(login_value)
+    if not tokens:
+        return bool(find_buttons(["Выйти"]))
+    try:
+        top_txt = driver.execute_script("""
+            const els = Array.from(document.querySelectorAll('header, nav, [class*="header"], [class*="topbar"], [class*="navbar"], body > div'));
+            for (const el of els) {
+                const t = (el.innerText || '').toLowerCase();
+                if (t.includes('выйти') || t.includes('уведомления')) {
+                    return t.slice(0, 600);
+                }
+            }
+            return (document.body?.innerText || '').slice(0, 500).toLowerCase();
+        """) or ""
+    except Exception:
+        top_txt = page_text()[:500]
+    return any(tok in top_txt for tok in tokens)
+
+
 def ensure_account(login_value, password_value):
     """Use the account assigned to this workflow stage; stop if switching fails."""
-    if CURRENT_LOGIN == login_value and not is_login_page():
+    if CURRENT_LOGIN == login_value and _is_expected_user_active(login_value):
         return True
     if not is_login_page():
         logout_current_account()
@@ -1013,6 +1050,18 @@ def login_with(login_value, password_value):
     log(f"  Логин под: {login_value}")
     for sub_try in range(3):
         if not is_login_page():
+            if _is_expected_user_active(login_value):
+                CURRENT_LOGIN = login_value
+                return True
+            try:
+                driver.execute_cdp_cmd("Network.clearBrowserCookies", {})
+            except Exception:
+                pass
+            try:
+                driver.delete_all_cookies()
+                driver.execute_script("try{localStorage.clear();sessionStorage.clear();}catch(e){}")
+            except Exception:
+                pass
             driver.get(BASE_URL)
             time.sleep(2)
             dismiss_news_popup(wait=1)
@@ -1020,9 +1069,13 @@ def login_with(login_value, password_value):
             WebDriverWait(driver, WAIT).until(EC.visibility_of_element_located(
                 (By.XPATH, "//input[@type='password']")))
         except Exception:
-            if not is_login_page() and bool(find_buttons(["Выйти"])):
+            if not is_login_page() and bool(find_buttons(["Выйти"])) and _is_expected_user_active(login_value):
                 CURRENT_LOGIN = login_value
                 return True
+            try:
+                driver.execute_cdp_cmd("Network.clearBrowserCookies", {})
+            except Exception:
+                pass
             driver.get(BASE_URL)
             try:
                 WebDriverWait(driver, 12).until(EC.visibility_of_element_located(
@@ -1126,7 +1179,11 @@ def logout_current_account():
     except Exception as e:
         log(f"  • Keycloak logout: {e}", "INFO")
 
-    # 3. Очистка куки и сессий
+    # 3. Полная очистка куки всех доменов (включая Keycloak SSO) и сессий
+    try:
+        driver.execute_cdp_cmd("Network.clearBrowserCookies", {})
+    except Exception:
+        pass
     try:
         driver.delete_all_cookies()
         driver.execute_script("try{localStorage.clear();sessionStorage.clear();}catch(e){}")
@@ -2352,29 +2409,67 @@ def stage_discussion():
 # ==========================================
 # ЭТАПЫ 9-10: СОГЛАСОВАНИЕ / УТВЕРЖДЕНИЕ / ПОДПИСЬ
 # ==========================================
-def click_action(texts):
-    """Нажать статусную кнопку и подтвердить модалку, если появится. Возвращает текст кнопки."""
-    btns = find_buttons(texts)
+def _confirm_any_modal(texts, label_hint=""):
+    modal = wait_for_state(find_modal, timeout=3)
+    if not modal:
+        return False
+    try:
+        for ta in modal.find_elements(By.XPATH, ".//textarea"):
+            if ta.is_displayed() and ta.is_enabled():
+                type_text(ta, f"Автотест: {label_hint or texts[0]} ({STAMP})")
+                break
+    except Exception:
+        pass
+    conf = modal_button(modal, list(texts) + ["Подтвердить", "Утвердить", "Согласовать", "Отправить", "Сохранить", "ОК", "Да"])
+    if conf:
+        click_el(conf)
+        log(f"    Подтверждение '{label_hint or texts[0]}' нажато")
+        time.sleep(3.5)
+        return True
+    return False
+
+
+def click_action(texts, wait_sec=8):
+    """Нажать статусную кнопку (включая меню действий ⋯) и подтвердить модалку, если появится."""
+    btns = wait_for_state(lambda: find_buttons(texts), timeout=wait_sec) or []
     if not btns:
+        # Проверяем меню действий (⋯) в шапке карточки
+        try:
+            kebabs = [
+                b for b in driver.find_elements(
+                    By.XPATH,
+                    "//button[@aria-haspopup='menu' or contains(@aria-label,'Действ') or contains(@aria-label,'Меню') or normalize-space(.)='⋯' or normalize-space(.)='...']"
+                )
+                if b.is_displayed() and b.is_enabled()
+            ]
+            allowed_low = [t.lower() for t in texts]
+            for kb in kebabs[:4]:
+                click_el(kb)
+                time.sleep(0.8)
+                menu_items = [
+                    m for m in driver.find_elements(By.XPATH, "//*[@role='menuitem' or self::button or self::li]")
+                    if m.is_displayed()
+                ]
+                hit = next(
+                    (m for m in menu_items if any(al == (m.text or "").strip().lower() or al in (m.text or "").strip().lower() for al in allowed_low)),
+                    None,
+                )
+                if hit is not None:
+                    label = (hit.text or "").strip() or texts[0]
+                    click_el(hit)
+                    _confirm_any_modal(texts, label)
+                    return label
+                try:
+                    ActionChains(driver).send_keys(Keys.ESCAPE).perform()
+                except Exception:
+                    pass
+        except Exception:
+            pass
         return None
     label = (btns[0].text or "").strip() or texts[0]
     scroll_to(btns[0])
     click_el(btns[0])
-    time.sleep(2.5)
-    modal = find_modal()
-    if modal:
-        try:
-            for ta in modal.find_elements(By.XPATH, ".//textarea"):
-                if ta.is_displayed() and ta.is_enabled():
-                    type_text(ta, f"Автотест: {label} ({STAMP})")
-                    break
-        except Exception:
-            pass
-        conf = modal_button(modal, texts + ["Подтвердить", "Отправить", "Сохранить", "ОК", "Да"])
-        if conf:
-            click_el(conf)
-            log(f"    Подтверждение '{label}' нажато")
-            time.sleep(4)
+    _confirm_any_modal(texts, label)
     return label
 
 
@@ -2416,53 +2511,72 @@ def stage_send_for_approval():
     return True
 
 
+def _is_smeta_approved_stage(status_text):
+    low = (status_text or "").lower()
+    if not low:
+        return False
+    if "на согласовании" in low or "черновик" in low:
+        return False
+    return any(w in low for w in ("на утверждении", "согласован", "утвержд"))
+
+
 def stage_approve_main():
-    # Все процессы выполняются строго под первым аккаунтом (login_val / RGB_ACCOUNT1_LOGIN)
+    # Все процессы согласования маршрута выполняются под основным аккаунтом Sh Margulan Ju
     if not ensure_account(login_val, pass_val):
         return False
     goto_card()
     status = get_status()
-    if status and any(w in status.lower() for w in ("согласован", "утвержд")):
-        log(f"  ✓ Смета уже согласована ({login_val}): {status}", "PASS")
+    if _is_smeta_approved_stage(status):
+        log(f"  ✓ Смета уже прошла согласование ({login_val}): {status}", "PASS")
         return True
-    label = click_action(TO_APPROVE)
+    label = click_action(TO_APPROVE, wait_sec=10)
     if not label and click_text_deepest("Согласовать", "contains"):
         label = "Согласовать"
-        time.sleep(3)
+        _confirm_any_modal(TO_APPROVE, label)
     if not label:
         # Fallback: поиск задачи согласования в /tasks?tab=tasks под первым аккаунтом
         try:
             driver.get(BASE_URL + "tasks?tab=tasks")
             time.sleep(3)
-            for r in driver.find_elements(By.XPATH, "//*[self::tr or self::div or self::li][contains(normalize-space(.),'смет') or contains(normalize-space(.),'Смет') or contains(normalize-space(.),'Согласован') or contains(normalize-space(.),'согласован')]"):
-                if r.is_displayed():
-                    click_el(r)
-                    time.sleep(2)
-                    label = click_action(TO_APPROVE)
-                    if not label and click_text_deepest("Согласовать", "contains"):
-                        label = "Согласовать"
-                    if label:
-                        break
+            est_num = (STATE.get("code") or ESTIMATE_NAME or "").lower()
+            rows = [
+                r for r in driver.find_elements(
+                    By.XPATH,
+                    "//*[self::tr or self::div or self::li][contains(normalize-space(.),'смет') or contains(normalize-space(.),'Смет') or contains(normalize-space(.),'Согласован') or contains(normalize-space(.),'согласован')]"
+                )
+                if r.is_displayed()
+            ]
+            rows.sort(key=lambda el: 0 if est_num and est_num in (el.text or "").lower() else 1)
+            for r in rows[:6]:
+                click_el(r)
+                time.sleep(2)
+                label = click_action(TO_APPROVE, wait_sec=5)
+                if not label and click_text_deepest("Согласовать", "contains"):
+                    label = "Согласовать"
+                    _confirm_any_modal(TO_APPROVE, label)
+                if label:
+                    break
         except Exception:
             pass
     if label:
-        time.sleep(4)
-        driver.refresh()
-        wait_for_state(smeta_card_ready)
-        log(f"  Статус после согласования ({login_val}): {get_status()}", "PASS")
+        time.sleep(3)
+        goto_card()
+        wait_for_state(lambda: _is_smeta_approved_stage(get_status()), timeout=10)
+        after_status = get_status()
+        log(f"  Статус после согласования ({login_val}): {after_status}", "PASS")
         return True
 
     goto_card()
     status = get_status()
-    if status and any(w in status.lower() for w in ("согласован", "утвержд", "на согласовании")):
-        log(f"  ✓ Проверка согласования в первом аккаунте ({login_val}), текущий статус: {status}", "PASS")
+    if _is_smeta_approved_stage(status):
+        log(f"  ✓ Проверка согласования ({login_val}), текущий статус: {status}", "PASS")
         return True
-    log(f"  ⚠ Кнопки {TO_APPROVE} не найдены под основным аккаунтом", "WARN")
+    log(f"  ⚠ Кнопки {TO_APPROVE} не найдены под основным аккаунтом (статус: {status})", "WARN")
     return False
 
 
 def stage_confirm_by_talgat():
-    # Утверждение выполняется под 2-м или 3-м аккаунтом, который был назначен как Утверждающий
+    # Утверждение выполняется под аккаунтом утверждающего — Талгат Ерланович (резерв: Ерлан Талгатович)
     accounts_to_try = []
     if STATE.get("utv_account"):
         accounts_to_try.append(STATE["utv_account"])
@@ -2478,44 +2592,56 @@ def stage_confirm_by_talgat():
             if not wait_for_state(smeta_card_ready, timeout=15):
                 continue
             status = get_status()
-            if status and "утвержд" in status.lower():
+            vis_btns = [(b.text or "").strip() for b in driver.find_elements(By.TAG_NAME, "button") if b.is_displayed() and (b.text or "").strip()]
+            log(f"  • Карточка под {acc_l}: статус={status!r}, кнопки={vis_btns[:12]}", "INFO")
+            if status and "утвержд" in status.lower() and "на утверждении" not in status.lower():
                 log(f"  ✓ Смета уже утверждена ({acc_l}): {status}", "PASS")
                 return True
-            label = click_action(TO_CONFIRM)
+            label = click_action(TO_CONFIRM, wait_sec=10)
             if not label and click_text_deepest("Утвердить", "contains"):
                 label = "Утвердить"
-                time.sleep(3)
+                _confirm_any_modal(TO_CONFIRM, label)
             if not label:
                 # Fallback: поиск задачи утверждения в /tasks?tab=tasks под утверждающим аккаунтом
                 try:
                     driver.get(BASE_URL + "tasks?tab=tasks")
                     time.sleep(3)
-                    for r in driver.find_elements(By.XPATH, "//*[contains(normalize-space(.),'Утвердить') or contains(normalize-space(.),'смет') or contains(normalize-space(.),'Смет')]"):
-                        if r.is_displayed():
-                            click_el(r)
-                            time.sleep(2)
-                            label = click_action(TO_CONFIRM)
-                            if not label and click_text_deepest("Утвердить", "contains"):
-                                label = "Утвердить"
-                            if label:
-                                break
+                    est_key = (ESTIMATE_NAME or "").lower()
+                    rows = [
+                        r for r in driver.find_elements(
+                            By.XPATH,
+                            "//*[self::tr or self::div or self::li][contains(normalize-space(.),'Утвердить') or contains(normalize-space(.),'утвержд') or contains(normalize-space(.),'смет') or contains(normalize-space(.),'Смет')]"
+                        )
+                        if r.is_displayed()
+                    ]
+                    rows.sort(key=lambda el: 0 if est_key and est_key in (el.text or "").lower() else 1)
+                    for r in rows[:6]:
+                        click_el(r)
+                        time.sleep(2)
+                        label = click_action(TO_CONFIRM, wait_sec=5)
+                        if not label and click_text_deepest("Утвердить", "contains"):
+                            label = "Утвердить"
+                            _confirm_any_modal(TO_CONFIRM, label)
+                        if label:
+                            break
                 except Exception:
                     pass
             if label:
-                time.sleep(4)
+                time.sleep(3)
                 driver.get(STATE["url"])
                 wait_for_state(smeta_card_ready)
+                wait_for_state(lambda: "утвержд" in (get_status() or "").lower() and "на утверждении" not in (get_status() or "").lower(), timeout=10)
                 after_st = get_status()
                 log(f"  Статус после утверждения ({acc_l}): {after_st}", "PASS")
                 return True
-            # Если смета только в этом аккаунте не дала кнопку, пробуем следующий кандидат только если utv_account не был зафиксирован
             if STATE.get("utv_account") == (acc_l, acc_p):
                 driver.get(STATE["url"])
                 wait_for_state(smeta_card_ready)
                 st_now = get_status()
-                if st_now and "утвержд" in st_now.lower():
+                if st_now and "утвержд" in st_now.lower() and "на утверждении" not in st_now.lower():
                     log(f"  ✓ Смета утверждена ({acc_l}): {st_now}", "PASS")
                     return True
+                break
         log(f"  ⚠ Кнопка {TO_CONFIRM} не найдена под аккаунтом утверждающего ({STATE.get('utv_name') or SECOND_LOGIN})", "WARN")
         shot("smeta_confirm_no_btn")
         return False
@@ -2594,8 +2720,8 @@ def run():
         # Этап 10: Маршрут согласования
         step("Смета: Маршрут согласования: Sh Margulan Ju", add_approver)
 
-        # Этап 11: Утверждающий (2-й/3-й аккаунт)
-        step("Смета: Утверждающий: Алдажаров Диас", add_approver_final)
+        # Этап 11: Утверждающий (Талгат Ерланович)
+        step("Смета: Утверждающий: Талгат Ерланович", add_approver_final)
 
         # Этап 12: Отрицательный тест - пустая строка
         step('Смета: Отрицательная  пустая строка сметы', stage_negative_empty_line)
@@ -2626,8 +2752,8 @@ def run():
         # Этап 20: Согласование (основной аккаунт из маршрута)
         step("Смета: Согласовать (Sh Margulan Ju)", stage_approve_main)
 
-        # Этап 21: Утверждение (2-й/3-й аккаунт — утверждающий)
-        step("Смета: Утвердить (Алдажаров Диас)", stage_confirm_by_talgat)
+        # Этап 21: Утверждение (Талгат Ерланович)
+        step("Смета: Утвердить (Талгат Ерланович)", stage_confirm_by_talgat)
     except Exception as e:
         RUN_ERROR = f"{type(e).__name__}: {e}"
         log(f"КРИТИЧЕСКАЯ ОШИБКА: {e}", "FAIL")

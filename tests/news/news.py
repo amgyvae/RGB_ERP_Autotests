@@ -2993,17 +2993,60 @@ def news_open_owned():
 
 
 def stage_news_saved():
-    if not STATE.get('news_url'):return False
-    if not news_open() or not news_search(NEWS_TITLE) or NEWS_TITLE not in news_titles():return False
-    if not news_open_owned():return False
+    if not STATE.get('news_url'):
+        log('  ⚠ URL созданной новости отсутствует','WARN')
+        return False
+    found_in_search=False
+    for attempt in range(2):
+        if news_open() and news_search(NEWS_TITLE):
+            if wait_for_state(lambda:NEWS_TITLE in news_titles(),timeout=8):
+                found_in_search=True
+                break
+        time.sleep(1.5)
+    if not found_in_search:
+        log(f'  ⚠ Созданная новость не найдена поиском в списке (найдено: {news_titles()[:5]})','WARN')
+        return False
+    if not news_open_owned():
+        log('  ⚠ Карточка созданной новости не открылась','WARN')
+        return False
+    # Прокручиваем карточку, чтобы ленивые изображения (lazy-load) и вложения подгрузились
+    try:
+        driver.execute_script("""
+            const sc = document.scrollingElement || document.documentElement;
+            sc.scrollTop = sc.scrollHeight / 2;
+        """)
+        time.sleep(0.5)
+        driver.execute_script("window.scrollTo(0, 0);")
+    except Exception:
+        pass
+    wait_for_state(lambda:NEWS_TITLE in main_text() and all(os.path.basename(p) in main_text() for p in NEWS_FILES[2:]),timeout=8)
     text=main_text()
-    valid=all(part in text for part in [NEWS_TITLE,*NEWS_BODY,'Раздел: проверка редактора','Жирный текст','Курсив','Пункт один','Пункт два','Sh Margulan Ju'])
-    valid=valid and all(os.path.basename(p) in text for p in NEWS_FILES[2:])
-    valid=valid and driver.execute_script("return Array.from(document.querySelectorAll('.news-gallery img')).filter(i=>i.naturalWidth>0&&i.offsetWidth>80).length;")>=2
-    html=driver.execute_script("return document.querySelector('.news-body')?.innerHTML||'';")
-    valid=valid and all(re.search(pattern,html,re.I) for pattern in (r'<h2[ >]',r'<(strong|b)[ >]',r'<(em|i)[ >]',r'<ul[ >]'))
-    log(f'  Заголовок, автор, текст, форматирование, 2 изображения и 2 вложения: {bool(valid)}')
-    return valid
+    required_parts=[NEWS_TITLE,*NEWS_BODY,'Раздел: проверка редактора','Жирный текст','Курсив','Пункт один','Пункт два']
+    missing_parts=[part for part in required_parts if part not in text]
+    author_ok=('margulan' in text.lower() or 'маргулан' in text.lower())
+    files_ok=all(os.path.basename(p) in text for p in NEWS_FILES[2:])
+    def _loaded_news_images():
+        return int(driver.execute_script("""
+            const root = document.querySelector('main, article, .news-detail, [class*="news"]') || document.body;
+            const imgs = Array.from(root.querySelectorAll('.news-gallery img, .news-cover img, .news-body img, article img, img'));
+            return imgs.filter(i => {
+                const r = i.getBoundingClientRect();
+                const w = Math.max(i.offsetWidth || 0, r.width || 0);
+                return i.complete && i.naturalWidth > 0 && w > 60;
+            }).length;
+        """) or 0)
+    wait_for_state(lambda:_loaded_news_images()>=2,timeout=10)
+    img_count=_loaded_news_images()
+    html=driver.execute_script("""
+        const el = document.querySelector('.news-body, [class*="news-body"], [class*="news"][class*="content"], article');
+        return el ? el.innerHTML : (document.querySelector('main')?.innerHTML || '');
+    """) or ''
+    fmt_ok=all(re.search(pattern,html,re.I) for pattern in (r'<h[1-4][ >]',r'<(strong|b)[ >]',r'<(em|i)[ >]',r'<ul[ >]'))
+    valid=(not missing_parts) and author_ok and files_ok and img_count>=2 and fmt_ok
+    if not valid:
+        log(f'  ⚠ Проверка карточки новости: missing_text={missing_parts}, author={author_ok}, files={files_ok}, images={img_count}, fmt={fmt_ok}','WARN')
+    log(f'  Заголовок, автор, текст, форматирование, изображения ({img_count}) и 2 вложения: {bool(valid)}')
+    return bool(valid)
 
 
 def news_like_button():

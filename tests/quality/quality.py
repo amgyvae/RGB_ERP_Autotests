@@ -3447,14 +3447,23 @@ def quality_sort_columns_scenario(config):
 
 def quality_keyboard_input(field,value):
     # Real keyboard events update controlled React fields; never bypass input validation.
-    field.click()
-    field.send_keys(Keys.CONTROL,'a')
+    scroll_to(field)
+    try:
+        field.click()
+    except Exception:
+        js_click(field)
+    mod=Keys.COMMAND if sys.platform=='darwin' else Keys.CONTROL
+    field.send_keys(mod,'a')
     field.send_keys(Keys.BACKSPACE)
+    if (field.get_attribute('value') or ''):
+        set_native_value(field,'')
     if value:field.send_keys(value)
 
 
 def quality_form_contract(config):
-    if not quality_fresh_form(config):return False
+    if not quality_fresh_form(config):
+        log(f'  ⚠ Не удалось открыть чистую форму создания ({config["module"]})','WARN')
+        return False
     ok=True
     try:
         project=control_by_label(driver,'Проект')
@@ -3464,7 +3473,14 @@ def quality_form_contract(config):
         if config['module']!='Инспекция' and (project is None or ctrl_enabled(project)):
             log('  ⚠ Проект должен быть недоступен до выбора города','WARN');ok=False
         selected=pick_city_project() if config['module']!='Инспекция' else fill_select(driver,'Проект',keywords=PROJECT_KEYS,search=PROJECT_SEARCH)
-        child=wait_ctrl_enabled(driver,config['block'],15)
+        child=wait_ctrl_enabled(driver,config['block'],8)
+        if selected and (child is None or not ctrl_enabled(child)):
+            for q_lbl in ('Очередь','Очередь (тип объекта)'):
+                q_ctrl=control_by_label(driver,q_lbl)
+                if q_ctrl is not None and ctrl_enabled(q_ctrl):
+                    fill_select(driver,q_lbl)
+                    child=wait_ctrl_enabled(driver,config['block'],10)
+                    break
         if not selected or child is None or not ctrl_enabled(child):
             log(f'  ⚠ Зависимые поля: проект выбран={selected}; блок найден={child is not None}; доступен={child is not None and ctrl_enabled(child)}','WARN');ok=False
         # Actual HTML maxlength limits; enter through Selenium rather than bypassing the UI.
@@ -3473,13 +3489,19 @@ def quality_form_contract(config):
             button=next((e for e in buttons if e.is_displayed()),None)
             if button is not None and button.get_attribute('aria-expanded')=='false':
                 click_el(button)
-        fields=[e for e in driver.find_elements(By.XPATH,"//textarea[@maxlength]") if e.is_displayed() and e.is_enabled()]
+        fields=[
+            e for e in driver.find_elements(By.XPATH,"//textarea[@maxlength]")
+            if e.is_displayed() and e.is_enabled()
+            and not e.get_attribute('readonly')
+            and e.get_attribute('aria-readonly')!='true'
+            and 'заполняется автоматически' not in (e.get_attribute('placeholder') or '').lower()
+        ]
         for field in fields:
             maximum=int(field.get_attribute('maxlength'))
             quality_keyboard_input(field,'Я'*(maximum+1))
             length=len(field.get_attribute('value') or '')
             if length!=maximum:
-                log(f'  ⚠ Ограничение длины {maximum}: получено {length}','WARN');ok=False
+                log(f'  ⚠ Ограничение длины {maximum}: получено {length} (placeholder={field.get_attribute("placeholder")!r})','WARN');ok=False
             quality_keyboard_input(field,'')
         amounts=[e for e in driver.find_elements(By.XPATH,"//input[contains(@placeholder,'Ввести сумму')]") if e.is_displayed()]
         for field in amounts:
@@ -3698,9 +3720,29 @@ def quality_finish_create(module,list_url):
         if not quality_owned_card() or get_status()!='Черновик':return False
         driver.refresh()
         if not wait_for_state(lambda:get_status()=='Черновик' and QUALITY_CASE['marker'] in innertext()):return False
-        # Continue only through an edit/publish control actually exposed for this owned draft.
-        if click_button(['Редактировать','Изменить'],wait=2):
-            if not wait_for_state(lambda:bool(find_buttons(['Сохранить','Опубликовать']))):return False
+        # Проверяем наличие «Опубликовать» и сохранность вложений в черновике перед публикацией.
+        expected_uploads=list(QUALITY_CASE.get('uploads',[]))
+        need_edit_reattach=False
+        if find_buttons(['Опубликовать']) and expected_uploads:
+            docs_tab=next((e for e in driver.find_elements(By.XPATH,"//*[@role='tab']") if e.is_displayed() and (e.text or '').startswith('Документы')),None)
+            if docs_tab is not None:
+                tab_txt=(docs_tab.text or '').strip()
+                m_cnt=re.search(r'\((\d+)\)',tab_txt)
+                if m_cnt and int(m_cnt.group(1))<len(expected_uploads):
+                    need_edit_reattach=True
+                elif not m_cnt and click_el(docs_tab):
+                    if not wait_for_state(lambda:all(u in innertext() for u in expected_uploads),timeout=3):
+                        need_edit_reattach=True
+                    for d_tab in ('Детали предписания','Детали БиОТ','Детали инспекции'):
+                        click_text_deepest(d_tab,'exact')
+        if not find_buttons(['Опубликовать']) or need_edit_reattach:
+            if click_button(['Редактировать','Изменить'],wait=3):
+                if not wait_for_state(lambda:bool(find_buttons(['Сохранить','Опубликовать']))):return False
+                if expected_uploads and (need_edit_reattach or not all(u in innertext() for u in expected_uploads)):
+                    log('  • В черновике отсутствуют вложения — прикрепляем перед публикацией')
+                    QUALITY_CASE['uploads']=[]
+                    ensure_section('Документы и файлы')
+                    attach_files(config['key'])
         if not find_buttons(['Опубликовать']):
             log('  ⚠ В собственном черновике нет доступного продолжения публикации','WARN');return False
     if not click_button(['Опубликовать'],wait=4):return False
@@ -3721,9 +3763,10 @@ def quality_finish_create(module,list_url):
 
 
 def quality_download_buttons():
-    # Icon-only download buttons expose their name through aria-label.
+    # Icon-only download buttons expose their name through aria-label / title / download link.
     return [e for e in driver.find_elements(By.XPATH,
-        "//button[@aria-label='Скачать' or @title='Скачать' or normalize-space(.)='Скачать'] | //a[@download or @aria-label='Скачать']")
+        "//button[contains(@aria-label,'Скач') or contains(@aria-label,'скач') or contains(@title,'Скач') or contains(@title,'скач') or normalize-space(.)='Скачать'] | "
+        "//a[@download or contains(@aria-label,'Скач') or contains(@title,'Скач') or normalize-space(.)='Скачать']")
         if e.is_displayed() and e.is_enabled()]
 
 
@@ -3930,7 +3973,8 @@ def module_flow(prefix,menu_item,url,create_btn,heading,date_label,create_fn,mod
         step(f'{prefix}: зависимые поля, ограничения ввода и отмена формы',quality_form_contract,config)
         step(f'{prefix}: сохранение черновика и продолжение публикации',quality_create_case,config,'Простое',True)
         if QUALITY_FATAL or ROLE_RESTORE_FAILED:return
-        if step(f'{prefix}: создание, данные карточки, документы и обсуждение',quality_case_data,config):
+        step(f'{prefix}: создание, данные карточки, документы и обсуждение',quality_case_data,config)
+        if STATE.get('url') and quality_path(STATE['url']) in QUALITY_OWNED and get_status()!='Черновик':
             step(f'{prefix}: назначение участника и обязательные данные исполнения',quality_assignment_and_empty_execution,config)
             if QUALITY_FATAL or ROLE_RESTORE_FAILED:return
             step(f'{prefix}: исполнение, возврат и завершение по ролям',quality_advance_case,config)
@@ -3946,7 +3990,8 @@ def module_flow(prefix,menu_item,url,create_btn,heading,date_label,create_fn,mod
     draft_ok=step(f'{prefix}: сохранение черновика и продолжение публикации',quality_create_case,config,'Простое',True)
     if QUALITY_FATAL or ROLE_RESTORE_FAILED:return
     if not draft_ok:STATE['url']=None
-    if step(f'{prefix}: создание, данные карточки, документы и обсуждение',quality_case_data,config):
+    step(f'{prefix}: создание, данные карточки, документы и обсуждение',quality_case_data,config)
+    if STATE.get('url') and quality_path(STATE['url']) in QUALITY_OWNED and get_status()!='Черновик':
         step(f'{prefix}: доступ к записи без авторизации и восстановление сессии',quality_auth_scenario,config)
         if ROLE_RESTORE_FAILED:return
         step(f'{prefix}: назначение участника и обязательные данные исполнения',quality_assignment_and_empty_execution,config)

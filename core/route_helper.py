@@ -512,6 +512,27 @@ def _pick_margulan_in_open_panel(driver, panel, log=None):
     return None
 
 
+def _safe_displayed(el) -> bool:
+    try:
+        return bool(el is not None and el.is_displayed())
+    except Exception:
+        return False
+
+
+def _safe_enabled(el) -> bool:
+    try:
+        return bool(el is not None and el.is_enabled())
+    except Exception:
+        return False
+
+
+def _safe_attr(el, attr: str) -> str:
+    try:
+        return (el.get_attribute(attr) or "") if el is not None else ""
+    except Exception:
+        return ""
+
+
 def _select_margulan_for_trigger(driver, trigger, log=None) -> bool:
     panel = None
     for m in ("hard", "js", "selenium"):
@@ -525,10 +546,13 @@ def _select_margulan_for_trigger(driver, trigger, log=None) -> bool:
         except Exception:
             continue
         for _ in range(8):
-            vis = [
-                p for p in driver.find_elements(By.XPATH, "//div[contains(@class,'ui-select__panel') or @role='listbox']")
-                if p.is_displayed()
-            ]
+            try:
+                vis = [
+                    p for p in driver.find_elements(By.XPATH, "//div[contains(@class,'ui-select__panel') or @role='listbox']")
+                    if _safe_displayed(p)
+                ]
+            except Exception:
+                vis = []
             if vis:
                 panel = vis[-1]
                 break
@@ -554,21 +578,24 @@ def _select_margulan_for_trigger(driver, trigger, log=None) -> bool:
     modal = find_approvers_modal(driver)
     if modal is not None:
         try:
-            headings = [h for h in modal.find_elements(By.XPATH, ".//h2 | .//h3") if h.is_displayed()]
+            headings = [h for h in modal.find_elements(By.XPATH, ".//h2 | .//h3") if _safe_displayed(h)]
             if headings:
                 _click(driver, headings[0])
                 time.sleep(0.3)
         except Exception:
             pass
         clear_approvers_modal_templates(driver, modal, log=log)
-        save_btns = [
-            b for b in modal.find_elements(
-                By.XPATH,
-                ".//footer//button[normalize-space(.)='Сохранить' or normalize-space(.)='Добавить' or normalize-space(.)='Применить'] | "
-                ".//button[normalize-space(.)='Сохранить' or normalize-space(.)='Применить']"
-            )
-            if b.is_displayed() and b.is_enabled()
-        ]
+        try:
+            save_btns = [
+                b for b in modal.find_elements(
+                    By.XPATH,
+                    ".//footer//button[normalize-space(.)='Сохранить' or normalize-space(.)='Добавить' or normalize-space(.)='Применить'] | "
+                    ".//button[normalize-space(.)='Сохранить' or normalize-space(.)='Применить']"
+                )
+                if _safe_displayed(b) and _safe_enabled(b)
+            ]
+        except Exception:
+            save_btns = []
         if save_btns:
             _click(driver, save_btns[-1])
             for _ in range(16):
@@ -579,7 +606,7 @@ def _select_margulan_for_trigger(driver, trigger, log=None) -> bool:
         # Закрываем выпадающую панель, если она мультиселект и осталась открыта
         try:
             for bd in driver.find_elements(By.XPATH, "//div[contains(@class,'ui-select__backdrop')]"):
-                if bd.is_displayed():
+                if _safe_displayed(bd):
                     _hard_click(driver, bd)
                     time.sleep(0.3)
         except Exception:
@@ -734,22 +761,28 @@ def _fill_route_pass(driver, log=None) -> None:
             active_root = find_approvers_modal(driver) or find_route_section(driver)
             clicked_add_person = False
             if active_root is not None:
-                stages = [
-                    s for s in active_root.find_elements(By.CSS_SELECTOR, ".evd-route__stage, [class*='route__stage']")
-                    if s.is_displayed()
-                ]
-                target_scopes = [s for s in stages if not is_margulan_name(s.get_attribute("innerText") or "")] or [active_root]
-                for sc in target_scopes:
-                    btns = [
-                        b for b in sc.find_elements(
-                            By.XPATH,
-                            ".//button[normalize-space(.)='Добавить' or contains(normalize-space(.),'Добавить')]"
-                        )
-                        if b.is_displayed() and b.is_enabled()
-                        and "этап" not in (b.get_attribute("textContent") or "").lower()
-                        and "строк" not in (b.get_attribute("textContent") or "").lower()
-                        and "позиц" not in (b.get_attribute("textContent") or "").lower()
+                try:
+                    stages = [
+                        s for s in active_root.find_elements(By.CSS_SELECTOR, ".evd-route__stage, [class*='route__stage']")
+                        if _safe_displayed(s)
                     ]
+                    target_scopes = [s for s in stages if not is_margulan_name(_safe_attr(s, "innerText"))] or [active_root]
+                except Exception:
+                    target_scopes = [active_root]
+                for sc in target_scopes:
+                    try:
+                        btns = [
+                            b for b in sc.find_elements(
+                                By.XPATH,
+                                ".//button[normalize-space(.)='Добавить' or contains(normalize-space(.),'Добавить')]"
+                            )
+                            if _safe_displayed(b) and _safe_enabled(b)
+                            and "этап" not in _safe_attr(b, "textContent").lower()
+                            and "строк" not in _safe_attr(b, "textContent").lower()
+                            and "позиц" not in _safe_attr(b, "textContent").lower()
+                        ]
+                    except Exception:
+                        btns = []
                     if btns and _click(driver, btns[0]):
                         clicked_add_person = True
                         time.sleep(1.0)
@@ -758,7 +791,10 @@ def _fill_route_pass(driver, log=None) -> None:
                 for xp in [
                     "//*[contains(normalize-space(text()),' этап')]/following::button[contains(normalize-space(.),'Добавить')][1]",
                 ]:
-                    btns = [b for b in driver.find_elements(By.XPATH, xp) if b.is_displayed() and b.is_enabled()]
+                    try:
+                        btns = [b for b in driver.find_elements(By.XPATH, xp) if _safe_displayed(b) and _safe_enabled(b)]
+                    except Exception:
+                        btns = []
                     if btns and _click(driver, btns[0]):
                         clicked_add_person = True
                         time.sleep(1.0)
@@ -785,7 +821,7 @@ def _fill_route_pass(driver, log=None) -> None:
                     By.XPATH,
                     ".//button[normalize-space(.)='Сохранить' or normalize-space(.)='Применить' or normalize-space(.)='Подтвердить']"
                 )
-                if b.is_displayed() and b.is_enabled()
+                if _safe_displayed(b) and _safe_enabled(b)
             ]
             if save_btns:
                 _click(driver, save_btns[-1])
@@ -800,7 +836,7 @@ def _fill_route_pass(driver, log=None) -> None:
                 b for b in sec.find_elements(
                     By.XPATH, ".//button[normalize-space(.)='Сохранить' or normalize-space(.)='Применить']"
                 )
-                if b.is_displayed() and b.is_enabled()
+                if _safe_displayed(b) and _safe_enabled(b)
             ]
             if save_btns:
                 _click(driver, save_btns[0])
@@ -813,58 +849,68 @@ def setup_margulan_route(driver, log=None) -> bool:
     """Гарантирует, что в «Маршруте согласования»:
     1) удалены любые шаблонные согласующие (до и после нажатия «Добавить этап» / «Сменить маршрут»),
     2) добавлен этап и выбран пользователь Sh Margulan Ju."""
-    sec = find_route_section(driver)
-    if sec is not None:
+    for attempt in range(3):
         try:
-            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", sec)
-            time.sleep(0.3)
-        except Exception:
-            pass
+            sec = find_route_section(driver)
+            if sec is not None:
+                try:
+                    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", sec)
+                    time.sleep(0.3)
+                except Exception:
+                    pass
 
-    if route_only_margulan(driver):
-        if log:
-            log("  ✓ Маршрут согласования уже настроен на Sh Margulan Ju", "PASS")
-        return True
+            if route_only_margulan(driver):
+                if log:
+                    log("  ✓ Маршрут согласования уже настроен на Sh Margulan Ju", "PASS")
+                return True
 
-    _fill_route_pass(driver, log=log)
-
-    sec = find_route_section(driver)
-    confirmed = route_only_margulan(driver) or (sec is not None and is_margulan_name(sec.get_attribute("innerText") or ""))
-
-    # Если маршрут оставался в режиме чтения (например, есть кнопка «Сменить маршрут» в карточке Заявки)
-    if not confirmed:
-        change_btns = []
-        for xp in [
-            "//*[self::button or self::a][normalize-space(.)='Сменить маршрут' or normalize-space(.)='Изменить маршрут' or normalize-space(.)='Настроить маршрут']",
-        ]:
-            try:
-                change_btns = [b for b in driver.find_elements(By.XPATH, xp) if b.is_displayed() and b.is_enabled()]
-                if change_btns:
-                    break
-            except Exception:
-                continue
-        if change_btns and _click(driver, change_btns[0]):
-            if log:
-                log("  • Открыто редактирование маршрута («Сменить маршрут»)")
-            time.sleep(1.2)
-            modal = find_approvers_modal(driver)
-            if modal is not None:
-                clear_approvers_modal_templates(driver, modal, log=log)
             _fill_route_pass(driver, log=log)
 
-    for _ in range(8):
-        sec = find_route_section(driver)
-        if route_only_margulan(driver) or (sec is not None and is_margulan_name(sec.get_attribute("innerText") or "")):
-            if log:
-                log("  ✓ Маршрут согласования настроен (Sh Margulan Ju)", "PASS")
-            return True
-        time.sleep(0.8)
+            sec = find_route_section(driver)
+            confirmed = route_only_margulan(driver) or (sec is not None and is_margulan_name(_safe_attr(sec, "innerText")))
+
+            # Если маршрут оставался в режиме чтения (например, есть кнопка «Сменить маршрут» в карточке Заявки)
+            if not confirmed:
+                change_btns = []
+                for xp in [
+                    "//*[self::button or self::a][normalize-space(.)='Сменить маршрут' or normalize-space(.)='Изменить маршрут' or normalize-space(.)='Настроить маршрут']",
+                ]:
+                    try:
+                        change_btns = [b for b in driver.find_elements(By.XPATH, xp) if _safe_displayed(b) and _safe_enabled(b)]
+                        if change_btns:
+                            break
+                    except Exception:
+                        continue
+                if change_btns and _click(driver, change_btns[0]):
+                    if log:
+                        log("  • Открыто редактирование маршрута («Сменить маршрут»)")
+                    time.sleep(1.2)
+                    modal = find_approvers_modal(driver)
+                    if modal is not None:
+                        clear_approvers_modal_templates(driver, modal, log=log)
+                    _fill_route_pass(driver, log=log)
+
+            for _ in range(8):
+                sec = find_route_section(driver)
+                if route_only_margulan(driver) or (sec is not None and is_margulan_name(_safe_attr(sec, "innerText"))):
+                    if log:
+                        log("  ✓ Маршрут согласования настроен (Sh Margulan Ju)", "PASS")
+                    return True
+                time.sleep(0.8)
+            break
+        except Exception as exc:
+            if "stale element" in str(exc).lower() and attempt < 2:
+                if log:
+                    log(f"  • Перерисовка DOM маршрута (попытка {attempt + 1}/3) — повтор", "INFO")
+                time.sleep(0.8)
+                continue
+            raise
 
     sec_dump = ""
     try:
         s_el = find_route_section(driver)
         if s_el is not None:
-            sec_dump = " | ".join((s_el.get_attribute("innerText") or "").splitlines())[:200]
+            sec_dump = " | ".join(_safe_attr(s_el, "innerText").splitlines())[:200]
     except Exception:
         pass
     if log:
