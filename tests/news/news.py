@@ -2582,31 +2582,38 @@ def dismiss_news_popup(wait=0):
     """Close only the popup titled «Новые новости», including delayed popups."""
     deadline = time.monotonic() + wait
     while True:
-        titles = [e for e in driver.find_elements(
-            By.XPATH, "//*[normalize-space(text())='Новые новости']") if e.is_displayed()]
+        try:
+            titles = [e for e in driver.find_elements(
+                By.XPATH, "//*[normalize-space(text())='Новые новости']") if _safe_displayed(e)]
+        except Exception:
+            titles = []
         if titles:
             for title in titles:
-                roots = title.find_elements(By.XPATH,
-                    "./ancestor::*[.//button[normalize-space(.)='Закрыть']][1]")
-                if not roots:
+                try:
                     roots = title.find_elements(By.XPATH,
-                        "./ancestor::*[@role='dialog' or @aria-modal='true'][1]")
+                        "./ancestor::*[.//button[normalize-space(.)='Закрыть']][1]")
+                    if not roots:
+                        roots = title.find_elements(By.XPATH,
+                            "./ancestor::*[@role='dialog' or @aria-modal='true'][1]")
+                except Exception:
+                    roots = []
                 for root in roots:
-                    buttons = root.find_elements(By.XPATH,
-                        ".//button[normalize-space(.)='Закрыть']")
-                    # Prefer the footer button from the screenshot; use the X only
-                    # inside the same confirmed news dialog when labelled by the UI.
-                    buttons += root.find_elements(By.XPATH,
-                        ".//button[@aria-label='Закрыть' or @aria-label='Close' "
-                        "or @title='Закрыть']")
+                    try:
+                        buttons = root.find_elements(By.XPATH,
+                            ".//button[normalize-space(.)='Закрыть']")
+                        buttons += root.find_elements(By.XPATH,
+                            ".//button[@aria-label='Закрыть' or @aria-label='Close' "
+                            "or @title='Закрыть']")
+                    except Exception:
+                        buttons = []
                     for button in buttons:
-                        if not button.is_displayed() or not button.is_enabled():
+                        if not _safe_displayed(button) or not _safe_enabled(button):
                             continue
                         try:
                             button.click()
                         except Exception:
                             js_click(button)
-                        gone = wait_for_state(lambda: not any(e.is_displayed() for e in
+                        gone = wait_for_state(lambda: not any(_safe_displayed(e) for e in
                             driver.find_elements(By.XPATH,
                                 "//*[normalize-space(text())='Новые новости']")), timeout=3)
                         if gone:
@@ -2692,26 +2699,87 @@ def news_rows():
 def news_titles():return [r['title'] for r in news_rows()]
 
 
+def _safe_displayed(el):
+    try:
+        return bool(el is not None and el.is_displayed())
+    except Exception:
+        return False
+
+
+def _safe_enabled(el):
+    try:
+        return bool(el is not None and el.is_enabled())
+    except Exception:
+        return False
+
+
+def _safe_text(el):
+    try:
+        return ((el.get_attribute('textContent') or el.text or '') if el is not None else '').strip()
+    except Exception:
+        return ''
+
+
 def news_button(label):
-    return next((b for b in driver.find_elements(By.CSS_SELECTOR,'button') if b.is_displayed() and b.get_attribute('aria-label')==label),None)
+    try:
+        return driver.execute_script("""
+            const lbl = arguments[0];
+            const vis = e => !!(e && (e.offsetWidth || e.offsetHeight || e.getClientRects().length));
+            return Array.from(document.querySelectorAll('button')).find(
+                b => vis(b) && b.getAttribute('aria-label') === lbl
+            ) || null;
+        """, label)
+    except Exception:
+        return None
 
 
 def news_click(label):
-    b=news_button(label)
-    return b is not None and click_el(b)
+    for _ in range(3):
+        b = news_button(label)
+        if b is None:
+            return False
+        if click_el(b):
+            return True
+        time.sleep(0.25)
+    return False
 
 
 def news_options():
-    return [b for b in driver.find_elements(By.CSS_SELECTOR,'[role=list] button,[role=listbox] [role=option]') if b.is_displayed() and b.text.strip()]
+    try:
+        return driver.execute_script("""
+            const vis = e => !!(e && (e.offsetWidth || e.offsetHeight || e.getClientRects().length));
+            return Array.from(document.querySelectorAll('[role=list] button, [role=listbox] [role=option]'))
+                .filter(b => vis(b) && (b.innerText || b.textContent || '').trim());
+        """) or []
+    except Exception:
+        return []
 
 
-def news_choose(label,text):
-    if not news_click(label):return False
-    if not wait_for_state(news_options,timeout=5):return False
-    option=next((b for b in news_options() if b.text.strip()==text),None)
-    if option is None:return False
-    if not click_el(option):return False
-    return wait_idle(30,.5) and news_wait()
+def news_choose(label, text):
+    target_txt = str(text).strip()
+    for attempt in range(3):
+        try:
+            if not news_click(label):
+                continue
+            if not wait_for_state(news_options, timeout=5):
+                continue
+            option = driver.execute_script("""
+                const want = arguments[0];
+                const vis = e => !!(e && (e.offsetWidth || e.offsetHeight || e.getClientRects().length));
+                return Array.from(document.querySelectorAll('[role=list] button, [role=listbox] [role=option]'))
+                    .find(b => vis(b) && (b.innerText || b.textContent || '').trim() === want) || null;
+            """, target_txt)
+            if option is None:
+                return False
+            if not click_el(option):
+                continue
+            return wait_idle(30, .5) and news_wait()
+        except Exception as exc:
+            if 'stale element' in str(exc).lower() and attempt < 2:
+                time.sleep(0.4)
+                continue
+            raise
+    return False
 
 
 def news_reset():
@@ -2815,25 +2883,26 @@ def stage_news_sort():
     if not news_open():return False
     before=news_titles()
     if not news_click('Сортировка'):return False
-    options=[b for b in driver.find_elements(By.CSS_SELECTOR,'[role=menuitemradio]') if b.is_displayed()]
+    options=[b for b in driver.find_elements(By.CSS_SELECTOR,'[role=menuitemradio]') if _safe_displayed(b)]
     if not options:
         log('  Варианты сортировки не распознаны','WARN');return False
-    labels=[b.text.strip() for b in options]
+    labels=[_safe_text(b) for b in options]
     log(f'  Варианты сортировки: {labels}')
-    initial=next((i for i,b in enumerate(options) if b.get_attribute('aria-checked')=='true'),0)
+    initial=next((i for i,b in enumerate(options) if (b.get_attribute('aria-checked') if _safe_displayed(b) else '')=='true'),0)
     selected=next((i for i,t in enumerate(labels) if 'Заголовок' in t),None)
     if selected is None:return False
     if not click_el(options[selected]) or not news_wait():return False
     after=news_titles()
-    valid=sorted(before)==sorted(after) if pager_text()[1]==1 else True
+    pt=pager_text()
+    valid=(sorted(before)==sorted(after) if (pt and pt[1]==1) else True)
     valid=valid and [t.casefold() for t in after]==sorted(t.casefold() for t in after)
     log(f'  Заголовки после сортировки: {after}; корректный порядок: {valid}')
     if not news_click('Сортировка'):return False
-    options=[b for b in driver.find_elements(By.CSS_SELECTOR,'[role=menuitemradio]') if b.is_displayed()]
+    options=[b for b in driver.find_elements(By.CSS_SELECTOR,'[role=menuitemradio]') if _safe_displayed(b)]
     if not click_el(options[initial]) or not news_wait():return False
     if not news_click('Сортировка'):return False
-    restored=[b for b in driver.find_elements(By.CSS_SELECTOR,'[role=menuitemradio]') if b.is_displayed()]
-    current=restored[initial].text.strip()
+    restored=[b for b in driver.find_elements(By.CSS_SELECTOR,'[role=menuitemradio]') if _safe_displayed(b)]
+    current=_safe_text(restored[initial])
     if current!=labels[initial]:
         log(f'  Возврат направления: {current!r} → {labels[initial]!r}')
         if not click_el(restored[initial]) or not news_wait():return False
@@ -2845,36 +2914,61 @@ def stage_news_sort():
 
 
 def stage_news_pager():
-    if not news_open():return False
-    total=page_total();original=news_titles();trigger=news_button('Строк на странице')
-    if not trigger:return False
-    initial=(trigger.get_attribute('textContent') or '').strip()
-    for size in ('10','20'):
-        if not news_choose('Строк на странице',size):return False
-        if page_total()!=total or len(news_rows())!=min(int(size),total):return False
-        log(f'  Строк {size}: показано {len(news_rows())} из {total}')
-    pager=pager_text()
-    if not pager:return False
-    if pager[1]>1:
-        if not news_click('Следующая') or not wait_for_state(lambda:pager_text()[0]==2):return False
-        if not news_click('Предыдущая') or not wait_for_state(lambda:pager_text()[0]==1):return False
-    else:
-        for label in ('Первая страница','Предыдущая','Следующая','Последняя страница'):
-            b=news_button(label)
-            if b is None or b.is_enabled():return False
-        log('  Одна страница: переходы недоступны, переход на вторую не проверяется')
-    return news_choose('Строк на странице',initial) and news_titles()==original
+    for attempt in range(2):
+        try:
+            if not news_open():
+                return False
+            total = page_total()
+            original = news_titles()
+            trigger = news_button('Строк на странице')
+            if not trigger:
+                return False
+            initial = _safe_text(trigger)
+            if not initial:
+                return False
+            for size in ('10', '20'):
+                if not news_choose('Строк на странице', size):
+                    return False
+                expected_rows = min(int(size), total)
+                if not wait_for_state(lambda: page_total() == total and len(news_rows()) == expected_rows, timeout=10):
+                    log(f'  ⚠ Размер страницы {size}: ожидалось {expected_rows} из {total}, показано {len(news_rows())}', 'WARN')
+                    return False
+                log(f'  Строк {size}: показано {len(news_rows())} из {total}')
+            pager = pager_text()
+            if not pager:
+                return False
+            if pager[1] > 1:
+                if not news_click('Следующая') or not wait_for_state(lambda: bool((p := pager_text()) and p[0] == 2), timeout=10) or not news_wait():
+                    return False
+                if not news_click('Предыдущая') or not wait_for_state(lambda: bool((p := pager_text()) and p[0] == 1), timeout=10) or not news_wait():
+                    return False
+            else:
+                for label in ('Первая страница', 'Предыдущая', 'Следующая', 'Последняя страница'):
+                    b = news_button(label)
+                    if b is None or _safe_enabled(b):
+                        return False
+                log('  Одна страница: переходы недоступны, переход на вторую не проверяется')
+            if not news_choose('Строк на странице', initial):
+                return False
+            return bool(wait_for_state(lambda: news_titles() == original, timeout=10))
+        except Exception as exc:
+            if 'stale element' in str(exc).lower() and attempt == 0:
+                log(f'  • Перерисовка DOM пагинации (повтор попытки): {exc}')
+                time.sleep(0.8)
+                continue
+            raise
+    return False
 
 
 def stage_news_existing_menu():
     if not news_open():return False
     before=news_titles()
     if not news_click('Действия с новостью'):return False
-    items=wait_for_state(lambda:[b.text for b in driver.find_elements(By.CSS_SELECTOR,'[role^=menuitem]') if b.is_displayed()],timeout=4)
+    items=wait_for_state(lambda:[_safe_text(b) for b in driver.find_elements(By.CSS_SELECTOR,'[role^=menuitem]') if _safe_displayed(b)],timeout=4)
     log(f'  Меню: {items}; действия не выполняются')
     if not items:return False
     if not news_click('Действия с новостью'):return False
-    return not any(b.is_displayed() for b in driver.find_elements(By.CSS_SELECTOR,'[role=menu]')) and news_titles()==before
+    return not any(_safe_displayed(b) for b in driver.find_elements(By.CSS_SELECTOR,'[role=menu]')) and news_titles()==before
 
 
 def stage_news_existing_cards():
@@ -2889,10 +2983,18 @@ def stage_news_existing_cards():
     for title in titles:
         if not news_open():
             log(f'  Не удалось вернуться в ленту перед открытием «{title}»','WARN');return False
-        row=next((e for e in driver.find_elements(By.CSS_SELECTOR,'.news-row')
-                  if e.find_element(By.CSS_SELECTOR,'.news-row__title').text.strip()==title
-                  and 'черновик' not in (e.text or '').lower()),None)
-        if row is None or not click_el(row.find_element(By.CSS_SELECTOR,'.news-row__main')):
+        main_target = driver.execute_script("""
+            const want = arguments[0];
+            for (const r of document.querySelectorAll('.news-row')) {
+                const t = (r.querySelector('.news-row__title')?.innerText || '').trim();
+                const full = (r.innerText || '').toLowerCase();
+                if (t === want && !full.includes('черновик')) {
+                    return r.querySelector('.news-row__main') || r;
+                }
+            }
+            return null;
+        """, title)
+        if main_target is None or not click_el(main_target):
             log(f'  Не удалось кликнуть по карточке новости «{title}»','WARN');return False
         if not wait_for_state(lambda:not at_url(NEWS_URL) and 'Загрузка' not in main_text() and title[:30] in main_text(),timeout=20):
             log(f'  Карточка новости «{title}» не загрузилась вовремя (URL: {driver.current_url})','WARN');return False
@@ -3050,7 +3152,17 @@ def stage_news_saved():
 
 
 def news_like_button():
-    return next((b for b in driver.find_elements(By.CSS_SELECTOR,'button') if b.is_displayed() and (b.get_attribute('title')=='Интересно' or (b.get_attribute('aria-label') or '').startswith(('Интересно:','Нравится:')))),None)
+    try:
+        return driver.execute_script("""
+            const vis = e => !!(e && (e.offsetWidth || e.offsetHeight || e.getClientRects().length));
+            return Array.from(document.querySelectorAll('button')).find(b => {
+                if (!vis(b)) return false;
+                const al = b.getAttribute('aria-label') || '';
+                return b.getAttribute('title') === 'Интересно' || al.startsWith('Интересно:') || al.startsWith('Нравится:');
+            }) || null;
+        """)
+    except Exception:
+        return None
 
 
 def stage_news_like():
@@ -3058,16 +3170,16 @@ def stage_news_like():
     if not news_open_owned():return False
     button=news_like_button()
     if button is None:log('  Кнопка лайка не распознана','WARN');return False
-    match=re.search(r'\d+',button.text)
+    match=re.search(r'\d+',_safe_text(button))
     if not match:return False
     NEWS_LIKE_BEFORE=int(match.group())
     if not click_el(button):return False
-    return bool(wait_for_state(lambda:(b:=news_like_button()) is not None and str(NEWS_LIKE_BEFORE+1)==b.text.strip(),timeout=6))
+    return bool(wait_for_state(lambda:(b:=news_like_button()) is not None and str(NEWS_LIKE_BEFORE+1)==_safe_text(b),timeout=6))
 
 
 def stage_news_comment():
     if not news_open_owned():return False
-    ta=next((e for e in driver.find_elements(By.CSS_SELECTOR,'textarea,input[placeholder*=комментар]') if e.is_displayed()),None)
+    ta=next((e for e in driver.find_elements(By.CSS_SELECTOR,'textarea,input[placeholder*=комментар]') if _safe_displayed(e)),None)
     if ta is None:return False
     type_text(ta,NEWS_COMMENT)
     if not click_button(['Отправить','Комментировать']):return False
@@ -3077,7 +3189,7 @@ def stage_news_comment():
 def stage_news_persistence():
     if NEWS_LIKE_BEFORE is None or not news_open_owned():return False
     button=news_like_button()
-    return NEWS_COMMENT in main_text() and button is not None and button.text.strip()==str(NEWS_LIKE_BEFORE+1)
+    return NEWS_COMMENT in main_text() and button is not None and _safe_text(button)==str(NEWS_LIKE_BEFORE+1)
 
 
 def save_news_results():
