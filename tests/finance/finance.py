@@ -1213,10 +1213,15 @@ def parse_date(txt):
     return (y, mo, d)
 
 def date_text(trigger):
+    if trigger is None:
+        return ""
     try:
         return driver.execute_script(JS_DATE_TEXT, trigger) or ""
     except Exception:
-        return (trigger.get_attribute("textContent") or "").strip()
+        try:
+            return (trigger.get_attribute("textContent") or "").strip()
+        except Exception:
+            return ""
 
 def date_empty(trigger):
     t = date_text(trigger).strip().lower()
@@ -1290,20 +1295,30 @@ def calendar_goto(year, month):
         time.sleep(0.35)
     return False
 
-def pick_date(trigger, target):
+def pick_date(trigger, target, index=None):
     """Открыть календарь, перейти на месяц target (datetime.date), нажать день.
     Недоступные (disabled) дни не кликаем — если день заблокирован лимитом, берём ближайший доступный."""
+    def _fresh_trigger():
+        if index is not None:
+            cur = date_triggers()
+            if 0 <= index < len(cur):
+                return cur[index]
+        return trigger
+
     for attempt in range(2):
-        scroll_to(trigger)
+        trg = _fresh_trigger()
+        if trg is None:
+            return False
+        scroll_to(trg)
         time.sleep(0.3)
         for m in ("js", "hard", "selenium"):
             try:
                 if m == "js":
-                    js_click(trigger)
+                    js_click(trg)
                 elif m == "hard":
-                    hard_click(trigger)
+                    hard_click(trg)
                 else:
-                    trigger.click()
+                    trg.click()
                 break
             except Exception:
                 continue
@@ -1313,14 +1328,14 @@ def pick_date(trigger, target):
             if cell is not None:
                 click_el(cell)
                 time.sleep(0.8)
-                if not date_empty(trigger):
+                if not date_empty(_fresh_trigger()):
                     return True
         else:
             cells = calendar_cells()          # не смогли листать — берём любой доступный день
             if cells:
                 click_el(cell_by_day(cells, target.day))
                 time.sleep(0.8)
-                if not date_empty(trigger):
+                if not date_empty(_fresh_trigger()):
                     return True
         try:
             ActionChains(driver).send_keys(Keys.ESCAPE).perform()
@@ -1329,11 +1344,12 @@ def pick_date(trigger, target):
         time.sleep(0.4)
     # запасной путь: вписать дату текстом
     try:
-        inp = trigger if trigger.tag_name.lower() == "input" else trigger.find_element(By.XPATH, ".//input")
+        trg = _fresh_trigger()
+        inp = trg if trg.tag_name.lower() == "input" else trg.find_element(By.XPATH, ".//input")
         type_text(inp, target.strftime("%d.%m.%Y"))
         inp.send_keys(Keys.ENTER)
         time.sleep(0.6)
-        return not date_empty(trigger)
+        return not date_empty(_fresh_trigger())
     except Exception:
         return False
 
@@ -2414,22 +2430,33 @@ def num_field(scope, label, value):
     return False
 
 
+def _safe_el_text(el):
+    try:
+        return (el.get_attribute("textContent") or "").strip() if el is not None else ""
+    except Exception:
+        return ""
+
+
 def pick_work_kind_gfr(modal):
-    """«Вид работ» (плоский список или дерево) — выбираем первое доступное значение. TODO VERIFY."""
-    ctrl = control_by_label(modal, "Вид работ")
+    """«Вид работ» (плоский список или дерево) — выбираем первое доступное значение."""
+    def _ctrl():
+        m = find_modal("Добавить строку") or modal
+        return control_by_label(m, "Вид работ") if m is not None else None
+
+    ctrl = _ctrl()
     if ctrl is None:
         log("    ⚠ Контрол «Вид работ» не найден", "WARN")
         return False
 
     def changed():
-        t = (ctrl.get_attribute("textContent") or "").strip().lower()
+        t = _safe_el_text(_ctrl()).lower()
         return bool(t) and not t.startswith(("выберите", "выбрать"))
 
     panel = open_ui(ctrl)
     if panel is None:
         return False
     for attempt in range(10):
-        panel = visible_panel() or open_ui(ctrl)
+        panel = visible_panel() or open_ui(_ctrl())
         if panel is None:
             break
         opts = panel_options(panel)
@@ -2456,13 +2483,14 @@ def pick_work_kind_gfr(modal):
             break
     close_panels()
     try:
-        title = modal.find_element(By.XPATH, ".//*[normalize-space(text())='Добавить строку']")
+        m_now = find_modal("Добавить строку") or modal
+        title = m_now.find_element(By.XPATH, ".//*[normalize-space(text())='Добавить строку']")
         hard_click(title)
         time.sleep(0.5)
     except Exception:
         pass
     ok = changed()
-    log(f"    {'✓' if ok else '⚠'} Вид работ: {(ctrl.get_attribute('textContent') or '').strip()[:50]}",
+    log(f"    {'✓' if ok else '⚠'} Вид работ: {_safe_el_text(_ctrl())[:50]}",
         "PASS" if ok else "WARN")
     return ok
 
@@ -2477,10 +2505,13 @@ def add_gfr_row(desc, type_idx=0):
         return False
     rows0, total0 = rows_state()
 
+    def _modal():
+        return find_modal("Добавить строку") or modal
+
     # Тип строки
-    tctrl = control_by_label(modal, "Тип строки")
+    tctrl = control_by_label(_modal(), "Тип строки")
     if tctrl is not None:
-        cur = (tctrl.get_attribute("textContent") or "").strip()
+        cur = _safe_el_text(tctrl)
         if type_idx > 0:
             panel = open_ui(tctrl)
             opts = panel_options(panel) if panel else []
@@ -2495,57 +2526,69 @@ def add_gfr_row(desc, type_idx=0):
             log(f"    Тип строки: «{cur}»", "PASS")
     time.sleep(0.8)
 
+    modal = _modal()
     pick_work_kind_gfr(modal)
     time.sleep(0.8)
 
-    # Ед. измерения
+    # Ед. измерения (перепривязываем контрол после возможного ререндера формы)
+    modal = _modal()
     unit = control_by_label(modal, "Ед. измерения") or control_by_label(modal, "Ед.изм")
     if unit is not None:
-        utxt = (unit.get_attribute("textContent") or "").strip().lower()
+        utxt = _safe_el_text(unit).lower()
         if not utxt or utxt.startswith(("выбрать", "выберите")):
             panel = open_ui(unit)
             picked = select_in_panel(panel, keywords=["усл"], search="усл") if panel else None
             if not picked and panel:
                 close_panels()
-                panel = open_ui(unit)
+                unit = control_by_label(_modal(), "Ед. измерения") or control_by_label(_modal(), "Ед.изм")
+                panel = open_ui(unit) if unit is not None else None
                 picked = select_in_panel(panel, index=0) if panel else None
             log(f"    Ед. измерения: {picked or 'НЕ выбрана (поле неактивно?)'}",
                 "PASS" if picked else "WARN")
         else:
             log(f"    Ед. измерения: «{utxt}» (подставилась сама)", "PASS")
 
-    num_field(modal, "Количество", "10")
+    num_field(_modal(), "Количество", "10")
 
-    # Дата С / Дата ПО (С — раньше, ПО — чуть позже)
+    # Дата С / Дата ПО — на каждом шаге перечитываем date_triggers(), т.к. выбор Дата С ререндерит триггеры
     today = dtm.date.today()
-    trs = date_triggers()
-    for t in trs:
+    n_dates = len(date_triggers())
+    for idx in range(n_dates):
+        trs = date_triggers()
+        if idx >= len(trs):
+            break
+        t = trs[idx]
         try:
             lab = (driver.execute_script(JS_DATE_LABEL, t) or "").strip().lower()
         except Exception:
             lab = ""
-        is_end = bool(re.search(r"\bпо\b", lab)) or (not lab and t is trs[-1])
+        is_end = bool(re.search(r"\bпо\b", lab)) or (not lab and idx == len(trs) - 1)
         target = today + dtm.timedelta(days=35 if is_end else 5)
         if not date_empty(t):
             continue
-        okd = pick_date(t, target)
-        log(f"    {'✓' if okd else '⚠'} {'Дата ПО' if is_end else 'Дата С'}: {date_text(t) or 'не выбрана'}",
+        okd = pick_date(t, target, index=idx)
+        trs_after = date_triggers()
+        shown = date_text(trs_after[idx]) if idx < len(trs_after) else ""
+        log(f"    {'✓' if okd else '⚠'} {'Дата ПО' if is_end else 'Дата С'}: {shown or 'не выбрана'}",
             "PASS" if okd else "WARN")
 
+    modal = _modal()
     num_field(modal, "Сумма без НДС", "100000")
     time.sleep(0.5)
     wv = ""
     try:
+        modal = _modal()
         inp = modal.find_element(By.XPATH, ".//*[normalize-space(text())='Сумма с НДС']/following::input[1]")
         wv = (inp.get_attribute("value") or "").strip()
     except Exception:
         pass
     if not wv or wv in ("0,00", "0"):
-        num_field(modal, "Сумма с НДС", "116000")
+        num_field(_modal(), "Сумма с НДС", "116000")
     else:
         log(f"    ✓ Сумма с НДС посчиталась сама: {wv}", "PASS")
 
     try:
+        modal = _modal()
         ta = [t for t in modal.find_elements(By.XPATH, ".//textarea") if t.is_displayed()]
         if ta:
             type_text(ta[0], f"Автотест строка: {desc}")
@@ -2553,11 +2596,11 @@ def add_gfr_row(desc, type_idx=0):
     except Exception:
         pass
 
-    save = modal_button(modal, ["Добавить"])
+    save = modal_button(_modal(), ["Добавить"])
     if not save:
         log("  ⚠ Кнопка «Добавить» недоступна", "WARN")
         shot("gfr_row_nobutton")
-        close_modal_soft(modal)
+        close_modal_soft(_modal())
         return False
     click_el(save)
     closed = wait_modal_closed("Добавить строку", 8)
@@ -2705,10 +2748,23 @@ def stage_history_and_back():
 def stage_add_row_final():
     if not open_positions():
         return False
-    ok = add_gfr_row("после настройки маршрута", type_idx=1)
-    if not ok:
-        log("  • Повтор с типом строки по умолчанию")
-        ok = add_gfr_row("после настройки маршрута (2)", type_idx=0)
+    ok = False
+    for attempt_idx, (label_desc, tidx) in enumerate([("после настройки маршрута", 1), ("после настройки маршрута (2)", 0)]):
+        try:
+            ok = add_gfr_row(label_desc, type_idx=tidx)
+            if ok:
+                break
+        except Exception as exc:
+            log(f"  • Исключение при добавлении строки (попытка {attempt_idx + 1}): {exc}", "INFO")
+            try:
+                m = find_modal("Добавить строку") or find_modal()
+                if m:
+                    close_modal_soft(m)
+            except Exception:
+                pass
+            time.sleep(1.0)
+        if attempt_idx == 0:
+            log("  • Повтор с типом строки по умолчанию")
     goto_card()
     return ok
 

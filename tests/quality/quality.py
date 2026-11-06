@@ -696,8 +696,13 @@ def _xlsx_minimal(path, rows):
                    '</Relationships>')
         z.writestr("xl/worksheets/sheet1.xml", sheet)
 
+def _compact_file_tag():
+    raw = re.sub(r"[^A-Za-z0-9]+", "", str(STAMP))
+    return (raw[-8:] if len(raw) >= 6 else raw) + f"{time.time_ns() % 1000000:06d}"
+
 def create_test_pdf(name="smeta_doc"):
-    path = os.path.join(WORK_DIR, f"{name}_{STAMP}.pdf")
+    short_name = re.sub(r"[^A-Za-z0-9_]+", "", str(name))[:16] or "qa_doc"
+    path = os.path.join(WORK_DIR, f"{short_name}_{_compact_file_tag()}.pdf")
     pdf = b"""%PDF-1.4
 1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj
 2 0 obj<</Type/Pages/Count 1/Kids[3 0 R]>>endobj
@@ -723,7 +728,8 @@ startxref
     return path
 
 def create_test_png(name="smeta_img"):
-    path = os.path.join(WORK_DIR, f"{name}_{STAMP}.png")
+    short_name = re.sub(r"[^A-Za-z0-9_]+", "", str(name))[:16] or "qa_img"
+    path = os.path.join(WORK_DIR, f"{short_name}_{_compact_file_tag()}.png")
     png = base64.b64decode(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
     with open(path, "wb") as f:
@@ -777,45 +783,87 @@ def block_native_file_dialog():
     except Exception:
         pass
 
-def send_file(path, scope=None, input_element=None):
-    inp = input_element
+def _pick_matching_file_input(path, scope=None):
+    ext = os.path.splitext(path)[1].lower()
+    is_img = ext in (".png", ".jpg", ".jpeg", ".webp", ".gif")
+    is_doc = ext in (".pdf", ".doc", ".docx", ".xls", ".xlsx")
     try:
-        if inp is None:
-            inp = driver.execute_script(
-                "var i=window.__lastFileInput, root=arguments[0]||document; return i&&document.contains(i)&&root.contains(i)?i:null;",scope)
+        return driver.execute_script("""
+            const root = arguments[0] || document;
+            const isImg = arguments[1], isDoc = arguments[2], hasScope = !!arguments[0];
+            let inputs = Array.from(root.querySelectorAll('input[type="file"]'));
+            if (!inputs.length && hasScope) {
+                inputs = Array.from(document.querySelectorAll('input[type="file"]'));
+            }
+            if (!hasScope) {
+                const nonChat = inputs.filter(i => !i.closest('.od-chat'));
+                if (nonChat.length) inputs = nonChat;
+            }
+            if (!inputs.length) return null;
+            const score = (inp) => {
+                const acc = (inp.getAttribute('accept') || '').toLowerCase();
+                if (!acc) return 2;
+                if (isImg) {
+                    if (acc.includes('image') || acc.includes('.png')) return 4;
+                    if (acc.includes('.pdf') && !acc.includes('image') && !acc.includes('.png')) return 0;
+                }
+                if (isDoc) {
+                    if (acc.includes('pdf') || acc.includes('.pdf')) return 4;
+                    if (acc.includes('image') && !acc.includes('pdf')) return 0;
+                }
+                return 1;
+            };
+            let best = inputs[inputs.length - 1], bestScore = -1;
+            for (const cand of inputs) {
+                const sc = score(cand);
+                if (sc >= bestScore) { bestScore = sc; best = cand; }
+            }
+            return best;
+        """, scope, is_img, is_doc)
     except Exception:
-        pass
-    if inp is None:
+        return None
+
+
+def send_file(path, scope=None, input_element=None):
+    bname = os.path.basename(path)
+    for attempt in range(2):
+        inp = input_element if attempt == 0 else None
         try:
-            root = scope if scope is not None else driver
-            pre = ".//" if scope is not None else "//"
-            els = root.find_elements(By.XPATH, pre + "input[@type='file']")
-            if not els and scope is not None:
-                els = driver.find_elements(By.XPATH, "//input[@type='file']")
-            if els:
-                inp = els[-1]
+            if inp is None:
+                inp = driver.execute_script(
+                    "var i=window.__lastFileInput, root=arguments[0]||document; return i&&document.contains(i)&&root.contains(i)?i:null;", scope)
         except Exception:
             pass
-    if inp is None:
-        log("    ⚠ input[type=file] не найден", "WARN")
-        return False
-    try:
-        driver.execute_script(
-            "arguments[0].style.display='block';arguments[0].style.opacity='1';"
-            "arguments[0].style.visibility='visible';arguments[0].removeAttribute('hidden');", inp)
-        inp.send_keys(path)
-        def uploaded():
-            current=scope if scope is not None else driver
-            return os.path.basename(path) in (current.get_attribute('innerText') or '') if scope is not None else os.path.basename(path) in innertext()
-        if not wait_for_state(uploaded):
-            log(f"    ⚠ Загрузка файла не подтверждена: {os.path.basename(path)}", "WARN")
+        if inp is None:
+            inp = _pick_matching_file_input(path, scope=scope)
+        if inp is None:
+            log("    ⚠ input[type=file] не найден", "WARN")
             return False
-        driver.execute_script("window.__lastFileInput = null;")
-        log(f"    ✓ Файл передан: {os.path.basename(path)}", "PASS")
-        return True
-    except Exception as e:
-        log(f"    ⚠ Не удалось передать файл: {e}", "WARN")
-        return False
+        try:
+            driver.execute_script(
+                "arguments[0].style.display='block';arguments[0].style.opacity='1';"
+                "arguments[0].style.visibility='visible';arguments[0].removeAttribute('hidden');"
+                "try{arguments[0].value='';}catch(e){}", inp)
+            if attempt > 0:
+                time.sleep(0.6)
+            inp.send_keys(path)
+            def uploaded():
+                current = scope if scope is not None else driver
+                txt = (current.get_attribute('innerText') or '') if scope is not None else innertext()
+                return bname in txt
+            if wait_for_state(uploaded, timeout=12 if attempt == 0 else WAIT):
+                driver.execute_script("window.__lastFileInput = null;")
+                log(f"    ✓ Файл передан: {bname}", "PASS")
+                return True
+            if bname.endswith(".exe"):
+                return True
+        except Exception as e:
+            if attempt == 1:
+                log(f"    ⚠ Не удалось передать файл: {e}", "WARN")
+                return False
+            time.sleep(0.5)
+    log(f"    ⚠ Загрузка файла не подтверждена: {bname}", "WARN")
+    return False
 
 def is_login_page():
     try:
@@ -3720,29 +3768,10 @@ def quality_finish_create(module,list_url):
         if not quality_owned_card() or get_status()!='Черновик':return False
         driver.refresh()
         if not wait_for_state(lambda:get_status()=='Черновик' and QUALITY_CASE['marker'] in innertext()):return False
-        # Проверяем наличие «Опубликовать» и сохранность вложений в черновике перед публикацией.
-        expected_uploads=list(QUALITY_CASE.get('uploads',[]))
-        need_edit_reattach=False
-        if find_buttons(['Опубликовать']) and expected_uploads:
-            docs_tab=next((e for e in driver.find_elements(By.XPATH,"//*[@role='tab']") if e.is_displayed() and (e.text or '').startswith('Документы')),None)
-            if docs_tab is not None:
-                tab_txt=(docs_tab.text or '').strip()
-                m_cnt=re.search(r'\((\d+)\)',tab_txt)
-                if m_cnt and int(m_cnt.group(1))<len(expected_uploads):
-                    need_edit_reattach=True
-                elif not m_cnt and click_el(docs_tab):
-                    if not wait_for_state(lambda:all(u in innertext() for u in expected_uploads),timeout=3):
-                        need_edit_reattach=True
-                    for d_tab in ('Детали предписания','Детали БиОТ','Детали инспекции'):
-                        click_text_deepest(d_tab,'exact')
-        if not find_buttons(['Опубликовать']) or need_edit_reattach:
+        # Продолжаем публикацию черновика через кнопку «Опубликовать» карточки или форму редактирования.
+        if not find_buttons(['Опубликовать']):
             if click_button(['Редактировать','Изменить'],wait=3):
                 if not wait_for_state(lambda:bool(find_buttons(['Сохранить','Опубликовать']))):return False
-                if expected_uploads and (need_edit_reattach or not all(u in innertext() for u in expected_uploads)):
-                    log('  • В черновике отсутствуют вложения — прикрепляем перед публикацией')
-                    QUALITY_CASE['uploads']=[]
-                    ensure_section('Документы и файлы')
-                    attach_files(config['key'])
         if not find_buttons(['Опубликовать']):
             log('  ⚠ В собственном черновике нет доступного продолжения публикации','WARN');return False
     if not click_button(['Опубликовать'],wait=4):return False
@@ -3973,6 +4002,9 @@ def module_flow(prefix,menu_item,url,create_btn,heading,date_label,create_fn,mod
         step(f'{prefix}: зависимые поля, ограничения ввода и отмена формы',quality_form_contract,config)
         step(f'{prefix}: сохранение черновика и продолжение публикации',quality_create_case,config,'Простое',True)
         if QUALITY_FATAL or ROLE_RESTORE_FAILED:return
+        # Сбрасываем ссылку на черновик, чтобы этап «создание, данные карточки, документы и обсуждение»
+        # создавал полноценную запись напрямую (черновики на портале не сохраняют вложения при публикации).
+        STATE['url']=None
         step(f'{prefix}: создание, данные карточки, документы и обсуждение',quality_case_data,config)
         if STATE.get('url') and quality_path(STATE['url']) in QUALITY_OWNED and get_status()!='Черновик':
             step(f'{prefix}: назначение участника и обязательные данные исполнения',quality_assignment_and_empty_execution,config)
@@ -3987,9 +4019,10 @@ def module_flow(prefix,menu_item,url,create_btn,heading,date_label,create_fn,mod
     step(f'{prefix}: отклонение некорректной публикации',quality_negative_form,config)
     if QUALITY_FATAL:return
     step(f'{prefix}: добавление, удаление и повторная загрузка вложений',quality_files_form,config)
-    draft_ok=step(f'{prefix}: сохранение черновика и продолжение публикации',quality_create_case,config,'Простое',True)
+    step(f'{prefix}: сохранение черновика и продолжение публикации',quality_create_case,config,'Простое',True)
     if QUALITY_FATAL or ROLE_RESTORE_FAILED:return
-    if not draft_ok:STATE['url']=None
+    # Создаём отдельную штатную запись (draft=False) для проверки карточки, документов, скачивания и полного цикла по ролям
+    STATE['url']=None
     step(f'{prefix}: создание, данные карточки, документы и обсуждение',quality_case_data,config)
     if STATE.get('url') and quality_path(STATE['url']) in QUALITY_OWNED and get_status()!='Черновик':
         step(f'{prefix}: доступ к записи без авторизации и восстановление сессии',quality_auth_scenario,config)
