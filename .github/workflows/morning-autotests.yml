@@ -31,8 +31,8 @@ on:
       ncalayer:
         description: "Модули с ЭЦП (NCALayer) на облачном раннере"
         type: choice
-        options: [skip, include]
-        default: skip
+        options: [include, skip]
+        default: include
 
 # Не запускать два прогона одновременно: тесты пишут в одну таблицу и используют одни аккаунты.
 concurrency:
@@ -171,9 +171,9 @@ jobs:
         if: steps.gate.outputs.should_run == 'true'
         env:
           MODULES: ${{ inputs.modules || vars.AUTOTEST_MODULES || 'all' }}
-          # На облачном Ubuntu нет NCALayer — такие модули пропускаются,
-          # если не выбран self-hosted раннер или ncalayer=include.
-          WEB_ONLY: ${{ (vars.AUTOTEST_RUNNER || 'ubuntu-latest') == 'ubuntu-latest' && inputs.ncalayer != 'include' }}
+          # Headless NCALayer работает автономно на Java в headless-режиме (wss://127.0.0.1:13579)
+          # на любом облачном раннере Ubuntu и на Windows. Пропускаем ЭЦП только если явно выбрано skip.
+          WEB_ONLY: ${{ inputs.ncalayer == 'skip' }}
           TG_ENABLED: ${{ vars.TG_ENABLED || '1' }}
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           TG_CHATS: ${{ secrets.TG_CHATS }}
@@ -218,10 +218,10 @@ jobs:
       RGB_ACCOUNT1_LOGIN: jyktmargyplay2@gmail.com
       RGB_ACCOUNT1_PASSWORD: '12341234'
       RGB_ACCOUNT1_PASSWORD_ALT: '12341234'
-      RGB_ACCOUNT2_LOGIN: jyktmargyplay2@gmail.com
-      RGB_ACCOUNT2_PASSWORD: '12341234'
-      RGB_ACCOUNT3_LOGIN: jyktmargyplay2@gmail.com
-      RGB_ACCOUNT3_PASSWORD: '12341234'
+      RGB_ACCOUNT2_LOGIN: ${{ secrets.RGB_ACCOUNT2_LOGIN || 'dias.aldazharov@bk.ru' }}
+      RGB_ACCOUNT2_PASSWORD: ${{ secrets.RGB_ACCOUNT2_PASSWORD || 'h7WxqKIR' }}
+      RGB_ACCOUNT3_LOGIN: ${{ secrets.RGB_ACCOUNT3_LOGIN || 'aldazarovdias@gmail.com' }}
+      RGB_ACCOUNT3_PASSWORD: ${{ secrets.RGB_ACCOUNT3_PASSWORD || '12341234' }}
       NCA_KEY1_PASSWORD: ${{ secrets.NCA_KEY1_PASSWORD }}
       NCA_KEY2_PASSWORD: ${{ secrets.NCA_KEY2_PASSWORD }}
       TG_TOKEN: ${{ secrets.TG_TOKEN }}
@@ -230,6 +230,12 @@ jobs:
       GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Установка Java для Headless NCALayer
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
 
       - uses: actions/setup-python@v5
         with:

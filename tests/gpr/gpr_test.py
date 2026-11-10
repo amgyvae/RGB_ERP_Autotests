@@ -27,8 +27,20 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from webdriver_manager.chrome import ChromeDriverManager
 
+from ncalayer_headless import ensure_headless_ncalayer_running, sign_with_ncalayer as _headless_sign_with_ncalayer
+
+ensure_headless_ncalayer_running()
+
 _chrome_options = Options()
 _chrome_options.add_argument("--start-maximized")
+_chrome_options.add_argument("--ignore-certificate-errors")
+_chrome_options.add_argument("--allow-insecure-localhost")
+_chrome_options.add_argument(
+    "--disable-features=BlockInsecurePrivateNetworkRequests,"
+    "PrivateNetworkAccessSendPreflights,"
+    "PrivateNetworkAccessRespectPreflightResults,"
+    "LocalNetworkAccessChecks"
+)
 # Отключает всплывающий попап «Сохранить пароль?» в Chrome
 _chrome_options.add_experimental_option("prefs", {
     "credentials_enable_service": False,
@@ -39,6 +51,8 @@ _chrome_options.add_experimental_option("prefs", {
 if is_headless():
     _chrome_options.add_argument("--headless=new")
     _chrome_options.add_argument("--window-size=1920,1080")
+    _chrome_options.add_argument("--no-sandbox")
+    _chrome_options.add_argument("--disable-dev-shm-usage")
 
 driver = webdriver.Chrome(
     service=Service(ChromeDriverManager().install()),
@@ -222,14 +236,73 @@ class GprTest:
             time.sleep(0.5)
         raise StepFailed(f"Ни одна из кнопок не найдена: {texts}")
 
+    def dismiss_news_popup(self):
+        """Закрывает всплывающее окно «Новые новости» / «Срочная новость», если оно появилось."""
+        try:
+            dialogs = [
+                d for d in self.d.find_elements(By.XPATH, self.modal())
+                if d.is_displayed()
+            ]
+            for dlg in dialogs:
+                txt = (dlg.text or "")
+                if any(k in txt for k in ("Новые новости", "Срочная новость", "Прочитать все", "Ознакомлен")):
+                    for btn_xp in (
+                        ".//button[contains(normalize-space(.),'Закрыть') or contains(normalize-space(.),'Ознакомлен') or contains(normalize-space(.),'Понятно')]",
+                        ".//button[@aria-label='Закрыть']",
+                    ):
+                        btns = [b for b in dlg.find_elements(By.XPATH, btn_xp) if b.is_displayed()]
+                        if btns:
+                            self.d.execute_script("arguments[0].click();", btns[-1])
+                            time.sleep(0.5)
+                            break
+        except Exception:
+            pass
+
+    def clear_el(self, el):
+        for mod in (Keys.COMMAND, Keys.CONTROL):
+            try:
+                el.send_keys(mod, "a")
+                el.send_keys(Keys.BACKSPACE)
+            except Exception:
+                pass
+        try:
+            cur = el.get_attribute("value") or ""
+            if cur:
+                el.send_keys(Keys.END)
+                el.send_keys(Keys.BACKSPACE * (len(cur) + 2))
+        except Exception:
+            pass
+        try:
+            if (el.get_attribute("value") or ""):
+                self.d.execute_script(
+                    """
+                    const el = arguments[0];
+                    const proto = el.tagName === 'TEXTAREA'
+                        ? window.HTMLTextAreaElement.prototype
+                        : window.HTMLInputElement.prototype;
+                    const desc = Object.getOwnPropertyDescriptor(proto, 'value');
+                    if (desc && desc.set) desc.set.call(el, '');
+                    else el.value = '';
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                    """,
+                    el,
+                )
+        except Exception:
+            pass
+
     def type_into(self, xpath, value, clear=True, timeout=TIMEOUT):
         el = self.visible(xpath, timeout)
         self.d.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
-        el.click()
+        try:
+            el.click()
+        except ElementClickInterceptedException:
+            self.dismiss_news_popup()
+            self.d.execute_script("arguments[0].click();", el)
         if clear:
-            el.send_keys(Keys.CONTROL, "a")
-            el.send_keys(Keys.DELETE)
-        el.send_keys(value)
+            self.clear_el(el)
+        if value:
+            el.send_keys(value)
         return el
 
     def _label_xp(self, label):
@@ -280,23 +353,46 @@ class GprTest:
     def fill_date(self, label, dt, modal_title="Добавить строку"):
         """Заполняет дату. Простой ввод текста часто НЕ фиксируется компонентом-календарём
         (поле визуально показывает текст, но внутреннее состояние формы остаётся пустым —
-        именно так терялись «плановое начало/конец»). Поэтому после ввода текста ещё и
-        кликаем по дню в открывшемся календаре, если он появился — это и есть «настоящее»
-        подтверждение выбора для большинства таких виджетов."""
+        именно так терялись «плановое начало/конец»). Поэтому сначала пробуем выбрать день
+        напрямую в открывшемся календаре текущего месяца, а при необходимости вводим дату."""
         el = self.visible(self.input_after_label(label))
         self.d.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
         target_day = str(dt.day)
-        for fmt in ("%d.%m.%Y", "%Y-%m-%d", "%d/%m/%Y"):
+        day_xp = ("//*[(@role='gridcell' or @role='button' or contains(@class,'day') "
+                  "or contains(@class,'cell')) and normalize-space(text())="
+                  f"'{target_day}' and not(contains(@class,'disabled')) "
+                  "and not(contains(@class,'outside')) and not(contains(@class,'other')) and not(@disabled)]")
+
+        # Попытка 1: открыть календарь кликом по полю и сразу выбрать день текущего месяца
+        try:
             el.click()
-            el.send_keys(Keys.CONTROL, "a")
-            el.send_keys(Keys.DELETE)
+        except Exception:
+            self.d.execute_script("arguments[0].click();", el)
+        time.sleep(0.5)
+        day_cells = [e for e in self.d.find_elements(By.XPATH, day_xp) if e.is_displayed()]
+        if day_cells:
+            picked = day_cells[-1]
+            self.d.execute_script("arguments[0].scrollIntoView({block:'center'});", picked)
+            try:
+                picked.click()
+            except Exception:
+                self.d.execute_script("arguments[0].click();", picked)
+            time.sleep(0.4)
+            self.close_popups_in_modal(modal_title)
+            val = (el.get_attribute("value") or "").strip()
+            if dt.strftime("%Y") in val or re.search(r"\d{2}[./-]\d{2}[./-]\d{4}", val):
+                log(f"  [i] {label}: {val}")
+                return
+
+        for fmt in ("%d.%m.%Y", "%Y-%m-%d", "%d/%m/%Y"):
+            try:
+                el.click()
+            except Exception:
+                self.d.execute_script("arguments[0].click();", el)
+            self.clear_el(el)
             el.send_keys(dt.strftime(fmt))
             time.sleep(0.5)
 
-            day_xp = ("//*[(@role='gridcell' or @role='button' or contains(@class,'day') "
-                      "or contains(@class,'cell')) and normalize-space(text())="
-                      f"'{target_day}' and not(contains(@class,'disabled')) "
-                      "and not(contains(@class,'outside')) and not(contains(@class,'other'))]")
             day_cells = [e for e in self.d.find_elements(By.XPATH, day_xp) if e.is_displayed()]
             if day_cells:
                 picked = next((c for c in day_cells
@@ -311,7 +407,7 @@ class GprTest:
 
             self.close_popups_in_modal(modal_title)
             val = (el.get_attribute("value") or "").strip()
-            if dt.strftime("%Y") in val:      # в поле реально дата, а не «18,1» в чужом поле
+            if dt.strftime("%Y") in val or re.search(r"\d{2}[./-]\d{2}[./-]\d{4}", val):
                 log(f"  [i] {label}: {val}")
                 return
         ph = el.get_attribute("placeholder") or ""
@@ -439,6 +535,7 @@ class GprTest:
         log(f"\n[STEP] {name}")
         started = time.perf_counter()
         try:
+            self.dismiss_news_popup()
             func()
             self.results.append((name, "OK", "", critical))
             log("  [OK] OK")
@@ -491,6 +588,7 @@ class GprTest:
         if "/schedules/gpr" not in self.d.current_url:
             self.d.get(BASE_URL)
             time.sleep(3)
+        self.dismiss_news_popup()
         log(f"  [i] вошли как {email} ({self.current_user_name()})")
 
     def logout(self):
@@ -548,57 +646,16 @@ class GprTest:
 
     # ===================================================== ЭЦП / NCALayer
     def nca_sign(self, p12_path, nca_password):
-        """Выбор .p12 и ввод пароля в окне NCALayer (через pyautogui, окно Java)."""
-        import pyautogui
-        import pyperclip
-        pyautogui.FAILSAFE = False
-
-        def paste(text):
-            pyperclip.copy(text)
-            time.sleep(0.2)
-            pyautogui.hotkey("ctrl", "v")
-            time.sleep(0.4)
-
-        keys = ["NCALayer", "Открыть", "Open", "Выбор", "Выберите", "Пароль", "Password"]
-
-        def nca_windows():
-            try:
-                return [t for t in pyautogui.getAllTitles() if t and any(k.lower() in t.lower() for k in keys)]
-            except Exception:
-                return []
-
-        end = time.time() + NCA_WAIT
-        wins = []
-        while time.time() < end and not wins:
-            wins = nca_windows()
-            time.sleep(1)
-        if not wins:
-            log("  [!] окно NCALayer не появилось — подпись ЭЦП не запрашивалась")
-            return False
-        log(f"  [i] окно NCALayer: {wins}")
-        try:
-            w = pyautogui.getWindowsWithTitle(wins[0])[0]
-            w.activate()
-        except Exception:
-            pass
-        time.sleep(1.5)
-        # 1) выбор файла ключа
-        paste(p12_path)
-        pyautogui.press("enter")
-        time.sleep(2.5)
-        # 2) пароль к ключу
-        paste(nca_password)
-        pyautogui.press("enter")
-        time.sleep(3)
-        # 3) подтверждение выбора сертификата / «Подписать» (если окно ещё открыто)
-        for _ in range(3):
-            if not nca_windows():
-                break
-            pyautogui.press("enter")
-            time.sleep(2.5)
-        if nca_windows():
-            raise StepFailed("Окно NCALayer не закрылось — проверьте путь к ключу и пароль")
-        return True
+        """Подпись через Headless NCALayer (wss://127.0.0.1:13579)."""
+        ok = _headless_sign_with_ncalayer(
+            password=nca_password,
+            p12_path=p12_path,
+            log=log,
+            timeout=float(NCA_WAIT or 30),
+        )
+        if not ok:
+            log("  [!] подпись через NCALayer не подтверждена (возможно портал не запросил ЭЦП)")
+        return ok
 
     def sign_action(self, main_buttons, p12, pwd, comment):
         self.d.get(self.gpr_url)
@@ -617,10 +674,12 @@ class GprTest:
             log(f"  [i] в окне подтверждения нажато «{c}»")
         except StepFailed:
             pass
-        self.nca_sign(p12, pwd)
-        time.sleep(3)
-        self.d.refresh()
-        time.sleep(3)
+        final = ["Утвержден", "Утверждён", "Подписан", "Подписано"]
+        if not self.exists(" | ".join(self.xp_text(st, False) for st in final), 3):
+            self.nca_sign(p12, pwd)
+            time.sleep(3)
+            self.d.refresh()
+            time.sleep(3)
 
     # ===================================================== шаги
     def s01_login_first(self):
@@ -650,23 +709,30 @@ class GprTest:
         self.assert_text(PROJECT_NAME)
 
     def s05_search(self):
+        self.dismiss_news_popup()
         box = "//input[contains(@placeholder,'Поиск') and not(ancestor::*[@role='dialog'])]"
         self.type_into(box, "Flagman"); time.sleep(1.5)
         self.assert_text("Flagman")
         self.type_into(box, "zzz_nothing_" + RUN_ID); time.sleep(1.5)
         if self.exists(self.xp_text("Flagman", False), 1):
             raise StepFailed("Поиск по несуществующему значению всё ещё показывает проекты")
-        el = self.visible(box); el.send_keys(Keys.CONTROL, "a"); el.send_keys(Keys.DELETE)
+        clear_btn = f"({box}/following-sibling::button | {box}/..//button)[1]"
+        if self.exists(clear_btn, 1):
+            self.click(clear_btn, 2)
+        else:
+            el = self.visible(box)
+            self.clear_el(el)
         time.sleep(1.5)
         self.assert_text(PROJECT_NAME)
 
     def s06_create_modal_close_cancel(self):
+        self.dismiss_news_popup()
         self.click_text("Создать ГПР", tag="button")
         if not self.modal_open("Создать ГПР"):
             raise StepFailed("Модалка «Создать ГПР» не открылась")
         for t in ["Проект", "Название", "На основании сметы", "Отмена", "Создать"]:
             self.assert_text(t)
-        self.click(f"({self.modal()}//button[.//*[name()='svg'] and string-length(normalize-space(.))=0])[1]")
+        self.click(f"({self.modal()}//button[(@aria-label='Закрыть' or .//*[name()='svg']) and string-length(normalize-space(.))=0])[last()]")
         time.sleep(1)
         if self.exists(self.xp_text("На основании сметы", True), 2):
             raise StepFailed("Модалка не закрылась по крестику")
@@ -1000,8 +1066,12 @@ class GprTest:
         return name
 
     def _pick_owned_person(self, placeholder, role):
+        third_login_eff = THIRD_LOGIN if (THIRD_LOGIN and THIRD_LOGIN != login_val) else "aldazarovdias@gmail.com"
+        third_pass_eff = THIRD_PASS if (THIRD_LOGIN and THIRD_LOGIN != login_val and THIRD_PASS) else "12341234"
         accounts = [
-            (THIRD_FIO, (THIRD_LOGIN, THIRD_PASS, THIRD_P12_PATH, THIRD_NCA_PASSWORD)),
+            (THIRD_FIO, (third_login_eff, third_pass_eff, THIRD_P12_PATH, THIRD_NCA_PASSWORD)),
+            ("Ерланович Талгат", ("marshar244@gmail.com", "12341234", THIRD_P12_PATH, THIRD_NCA_PASSWORD)),
+            ("Бейсембаев Куаныш Едилович", ("dias.aldazharov@bk.ru", "h7WxqKIR", THIRD_P12_PATH, THIRD_NCA_PASSWORD)),
         ]
         for index, (fio, account) in enumerate(accounts):
             try:
@@ -1181,6 +1251,10 @@ class GprTest:
         """Скрипт не закрывает браузер сам (нет driver.quit()) — его закрывает студия, когда
         скрипт-нода завершится. Чтобы можно было посмотреть на результат, держим процесс живым."""
         if HOLD_OPEN_SECONDS <= 0:
+            try:
+                self.d.quit()
+            except Exception:
+                pass
             return
         mins = HOLD_OPEN_SECONDS // 60
         log(f"\n[i] Держу браузер открытым ~{mins} мин., чтобы можно было посмотреть результат.")

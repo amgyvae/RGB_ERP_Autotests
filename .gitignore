@@ -26,6 +26,7 @@ index.html
 C:*/
 
 # ===== Python =====
+ncalayer.mainlog*
 __pycache__/
 *.py[cod]
 .pytest_cache/

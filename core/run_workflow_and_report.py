@@ -22,6 +22,13 @@ TELEGRAM: TG_TOKEN — секретный ключ бота. Он хранитс
 (/revoke) и обнови значение в .env / GitHub Secrets.
 """
 
+import sys as _sys
+from pathlib import Path as _Path
+_ROOT = _Path(__file__).resolve().parent.parent
+for _d in (_ROOT, _ROOT / "core", _ROOT / "config"):
+    if str(_d) not in _sys.path:
+        _sys.path.insert(0, str(_d))
+
 from artifact_paths import ROOT_DIR, SCREENS_DIR, LOGS_DIR, screen_path, log_path
 
 import os
@@ -338,15 +345,18 @@ def parse_gpr_results(output: str, task_map: dict):
 
 def run_and_collect(script_path: str, task_map: dict, result_format="standard", script_args=()):
     print(f"Запускаю {script_path} ...")
-    result = subprocess.run(
-        [sys.executable, script_path, *script_args], cwd=ROOT_DIR,
-        capture_output=True, text=True, encoding="utf-8", errors="replace"
+    script = Path(script_path).resolve()
+    console_log = LOGS_DIR / f"{script.stem}_console_{datetime.now():%Y%m%d_%H%M%S}_{uuid.uuid4().hex[:8]}.txt"
+    pp_dirs = [str(ROOT_DIR), str(ROOT_DIR / "core"), str(ROOT_DIR / "config"), str(script.parent)]
+    if os.environ.get("PYTHONPATH"):
+        pp_dirs.append(os.environ["PYTHONPATH"])
+    env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONPATH=os.pathsep.join(pp_dirs))
+    result = contacts_stream(
+        [sys.executable, "-u", str(script), *script_args],
+        ROOT_DIR, env, console_log, timeout=7200
     )
     output = result.stdout + "\n" + result.stderr
-    console_log = LOGS_DIR / f"{Path(script_path).stem}_console_{datetime.now():%Y%m%d_%H%M%S}_{uuid.uuid4().hex[:8]}.txt"
-    console_log.write_text(output, encoding="utf-8")
     print("Полный лог:", console_log)
-    print(output[-3000:])  # хвост вывода для контроля глазами
 
     if result_format == "acts":
         return parse_act_results(output, task_map)
@@ -354,7 +364,7 @@ def run_and_collect(script_path: str, task_map: dict, result_format="standard", 
     if result_format == "gpr":
         return parse_gpr_results(output, task_map)
 
-    findings = []
+    statuses = {}
     reasons = {}  # {task_name: "текст причины"} — только для провалов
 
     for line in output.splitlines():
@@ -378,9 +388,11 @@ def run_and_collect(script_path: str, task_map: dict, result_format="standard", 
         label, mark = m.group(1).strip().lower(), m.group(2)
         for prefix, task_name in task_map.items():
             if prefix in label:
-                findings.append((task_name, mark == "✓"))
+                passed = (mark == "✓")
+                statuses[task_name] = statuses.get(task_name, True) and passed
                 break
 
+    findings = list(statuses.items())
     return findings, reasons
 
 

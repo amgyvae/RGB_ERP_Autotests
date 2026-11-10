@@ -1,9 +1,14 @@
 import json
 import os
 import time
-import gspread
-from google.oauth2.service_account import Credentials
 from datetime import datetime
+
+try:
+    import gspread
+    from google.oauth2.service_account import Credentials
+except ImportError:
+    gspread = None
+    Credentials = None
 
 from env_config import ROOT_DIR, env
 
@@ -34,6 +39,8 @@ def _normalize_text(value):
 
 
 def _load_credentials():
+    if gspread is None or Credentials is None:
+        return None
     raw_json = env("GOOGLE_SERVICE_ACCOUNT_JSON", "-")
     if raw_json != "-" and raw_json.strip():
         try:

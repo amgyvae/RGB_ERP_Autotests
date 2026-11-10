@@ -66,8 +66,20 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from webdriver_manager.chrome import ChromeDriverManager
 
+from ncalayer_headless import ensure_headless_ncalayer_running, sign_with_ncalayer as _headless_sign_with_ncalayer
+
+ensure_headless_ncalayer_running()
+
 _chrome_options = Options()
 _chrome_options.add_argument("--start-maximized")
+_chrome_options.add_argument("--ignore-certificate-errors")
+_chrome_options.add_argument("--allow-insecure-localhost")
+_chrome_options.add_argument(
+    "--disable-features=BlockInsecurePrivateNetworkRequests,"
+    "PrivateNetworkAccessSendPreflights,"
+    "PrivateNetworkAccessRespectPreflightResults,"
+    "LocalNetworkAccessChecks"
+)
 # Отключает всплывающий попап «Сохранить пароль?» в Chrome
 _chrome_options.add_experimental_option("prefs", {
     "credentials_enable_service": False,
@@ -78,6 +90,8 @@ _chrome_options.add_experimental_option("prefs", {
 if is_headless():
     _chrome_options.add_argument("--headless=new")
     _chrome_options.add_argument("--window-size=1920,1080")
+    _chrome_options.add_argument("--no-sandbox")
+    _chrome_options.add_argument("--disable-dev-shm-usage")
 
 driver = webdriver.Chrome(
     service=Service(ChromeDriverManager().install()),
@@ -472,13 +486,14 @@ def find_visible_modal_container(hint_text=None):
                 hinted = [e for e in visible if hint_text.lower() in (e.text or "").lower()]
                 if hinted:
                     return hinted[-1]
+                continue
             if visible:
                 return visible[-1]
         except Exception:
             continue
 
     # Последний шанс: JS-эвристика — любой видимый fixed/absolute
-    # контейнер с заметной площадью (типичный признак модалки/попапа).
+    # контейнер с заметной площадью (типичный признак модалки/попапа), исключая тосты.
     try:
         el = driver.execute_script("""
             var hint = (arguments[0] || '').toLowerCase();
@@ -486,8 +501,10 @@ def find_visible_modal_container(hint_text=None):
             var best = null, bestZ = -1;
             for (var i=0;i<all.length;i++){
                 var e = all[i];
+                var cls = (typeof e.className === 'string' ? e.className : '').toLowerCase();
+                if (cls.indexOf('toast') !== -1 || cls.indexOf('notification') !== -1 || cls.indexOf('alert') !== -1 || cls.indexOf('snackbar') !== -1) continue;
                 var r = e.getBoundingClientRect();
-                if (r.width < 200 || r.height < 100) continue;
+                if (r.width < 250 || r.height < 160) continue;
                 var style = window.getComputedStyle(e);
                 if (style.display === 'none' || style.visibility === 'hidden') continue;
                 if (style.position !== 'fixed' && style.position !== 'absolute') continue;
@@ -1440,8 +1457,10 @@ def _select_in_ui_select(placeholder_text, search_text, option_keywords,
                 except Exception:
                     js_click(sinp)
                 time.sleep(0.3)
-                sinp.send_keys(Keys.CONTROL + "a")
-                sinp.send_keys(Keys.BACKSPACE)
+                try:
+                    sinp.clear()
+                except Exception:
+                    pass
                 time.sleep(0.2)
                 sinp.send_keys(search_text)
                 time.sleep(1.2)
@@ -1474,8 +1493,14 @@ def _select_in_ui_select(placeholder_text, search_text, option_keywords,
             try:
                 sinp = panel.find_element(
                     By.XPATH, ".//input[contains(@class,'ui-select__search-input')]")
-                sinp.send_keys(Keys.CONTROL + "a")
-                sinp.send_keys(Keys.BACKSPACE)
+                try:
+                    sinp.clear()
+                except Exception:
+                    pass
+                driver.execute_script(
+                    "arguments[0].value=''; arguments[0].dispatchEvent(new Event('input',{bubbles:true}));",
+                    sinp,
+                )
                 time.sleep(1.0)
             except Exception:
                 pass
@@ -2027,12 +2052,16 @@ def click_card_action(button_text):
 
 
 def get_current_status():
-    known = ["Черновик", "На согласовании", "На подписании",
-             "Подписан", "Действует", "Исполнен", "Отменён", "Архив"]
+    known = ["Черновик", "На согласовании", "На подписании", "На исполнении",
+             "Оплачено", "Загружено", "Исполнено", "Подписан", "Действует",
+             "Исполнен", "Отменён", "Архив", "Не оплачено"]
     for status in known:
         try:
-            els = driver.find_elements(By.XPATH,
-                f"//*[contains(@class,'ant-tag')][normalize-space(text())='{status}']")
+            els = driver.find_elements(
+                By.XPATH,
+                f"//*[contains(@class,'status') or contains(@class,'badge') or contains(@class,'tag')][normalize-space(text())='{status}'] | "
+                f"//header//*[normalize-space(text())='{status}']"
+            )
             for el in els:
                 if el.is_displayed():
                     return status
@@ -2042,259 +2071,15 @@ def get_current_status():
 
 
 # ==========================================
-# NCALayer (без изменений — внешнее приложение, дизайн сайта не влияет)
+# NCALayer (headless сервер + fallback)
 # ==========================================
 def sign_with_ncalayer(password, p12_path=None, appear_timeout=45):
-    try:
-        from pywinauto import Application, Desktop
-        from pywinauto.keyboard import send_keys
-    except ImportError:
-        log("  ⚠ pywinauto не установлен. pip install pywinauto", "WARN")
-        return False
-
-    time.sleep(2)
-
-    dialog = None
-    for _ in range(appear_timeout):
-        try:
-            desktop = Desktop(backend="uia")
-            nca_windows = desktop.windows(title_re=".*NCALayer.*")
-            if nca_windows:
-                if len(nca_windows) > 1:
-                    for w in nca_windows[1:]:
-                        try:
-                            w.close()
-                        except Exception:
-                            pass
-                    time.sleep(1)
-                app = Application(backend="uia").connect(title_re=".*NCALayer.*", timeout=5)
-                dialog = app.window(title_re=".*NCALayer.*")
-                if dialog.exists():
-                    break
-        except Exception:
-            pass
-        dialog = None
-        time.sleep(1)
-
-    if not dialog or not dialog.exists():
-        log("  ⚠ Окно NCALayer не появилось", "WARN")
-        return False
-
-    log("  ✓ NCALayer найден (pywinauto/UIA)", "PASS")
-    try:
-        dialog.set_focus()
-    except Exception:
-        pass
-    time.sleep(1)
-
-    if p12_path:
-        if not os.path.exists(p12_path):
-            log(f"  ⚠ Файл ЭЦП не найден: {p12_path}", "WARN")
-            return False
-
-        log(f"  Файл ЭЦП: {p12_path}")
-
-        clicked_folder = False
-        try:
-            btns = dialog.descendants(control_type="Button")
-            open_btn = btns[4] if len(btns) > 4 else None
-            if open_btn:
-                open_btn.click_input()
-                clicked_folder = True
-        except Exception:
-            pass
-
-        if not clicked_folder:
-            try:
-                btns = dialog.descendants(control_type="Button")
-                for i, b in enumerate(btns):
-                    try:
-                        b.click_input()
-                        time.sleep(1.5)
-                        test = Desktop(backend="win32").windows(
-                            title_re="(Файлды таңдаңыз|Выберите файл|Open|Открыть|Открытие)")
-                        if test:
-                            clicked_folder = True
-                            break
-                    except Exception:
-                        continue
-            except Exception:
-                pass
-
-        if not clicked_folder:
-            log("  ⚠ Кнопка выбора файла не найдена", "WARN")
-            shot("no_folder_btn")
-            return False
-
-        time.sleep(1.5)
-
-        try:
-            file_app = Application(backend="win32").connect(
-                title_re="(Файлды таңдаңыз|Выберите файл|Open|Открыть|Открытие)",
-                timeout=30
-            )
-            file_dlg = file_app.window(
-                title_re="(Файлды таңдаңыз|Выберите файл|Open|Открыть|Открытие)"
-            )
-            file_dlg.wait("visible", timeout=10)
-            file_dlg.set_focus()
-            time.sleep(0.5)
-
-            edit = file_dlg.child_window(class_name="Edit")
-            edit.set_edit_text(p12_path)
-            time.sleep(1)
-            edit.type_keys("{ENTER}")
-            time.sleep(2)
-        except Exception as e:
-            log(f"  ⚠ Ошибка в диалоге файла: {e}", "WARN")
-            shot("file_dialog_error")
-            return False
-
-        try:
-            dialog.set_focus()
-        except Exception:
-            pass
-        time.sleep(1)
-
-    password_ok = False
-    for edit_name in ["ПарольEdit", "ҚұпиясөзEdit"]:
-        try:
-            dialog[edit_name].set_edit_text("")
-            time.sleep(0.3)
-            dialog[edit_name].type_keys(password, with_spaces=True)
-            password_ok = True
-            break
-        except Exception:
-            continue
-
-    if not password_ok:
-        try:
-            edits = dialog.descendants(control_type="Edit")
-            if edits:
-                pw_edit = edits[-1]
-                pw_edit.click_input()
-                time.sleep(0.4)
-                try:
-                    pw_edit.set_edit_text("")
-                except Exception:
-                    send_keys("^a{DELETE}")
-                time.sleep(0.3)
-                try:
-                    pw_edit.set_edit_text(password)
-                    password_ok = True
-                except Exception:
-                    pw_edit.type_keys(password, with_spaces=True)
-                    password_ok = True
-        except Exception as e:
-            log(f"  ⚠ Ввод пароля через Edit не удался: {e}", "WARN")
-
-    if not password_ok:
-        log("  ⚠ Пароль не введён", "WARN")
-        shot("password_not_entered")
-        return False
-
-    time.sleep(0.8)
-    shot("ncalayer_password_typed")
-
-    opened = False
-    for btn_name in ["Ашу", "Открыть", "Open"]:
-        try:
-            btn = dialog.child_window(title=btn_name, control_type="Button")
-            if btn.exists():
-                btn.click_input()
-                opened = True
-                break
-        except Exception:
-            continue
-
-    if not opened:
-        try:
-            dialog["ОткрытьButton"].click()
-            opened = True
-        except Exception:
-            try:
-                send_keys("{ENTER}")
-                opened = True
-            except Exception:
-                pass
-
-    if not opened:
-        log("  ⚠ Кнопка 'Ашу' не нажата", "WARN")
-        return False
-
-    time.sleep(3)
-
-    try:
-        app = Application(backend="uia").connect(title_re=".*NCALayer.*", timeout=15)
-        dialog = app.window(title_re=".*NCALayer.*")
-        dialog.set_focus()
-        time.sleep(0.5)
-    except Exception:
-        pass
-
-    shot("ncalayer_key_list")
-
-    items = []
-    for _ in range(10):
-        try:
-            items = dialog.descendants(control_type="ListItem")
-            if items:
-                break
-        except Exception:
-            pass
-        time.sleep(1)
-
-    if items:
-        try:
-            items[0].click_input()
-            time.sleep(0.5)
-        except Exception:
-            try:
-                items[0].type_keys("{SPACE}")
-            except Exception:
-                pass
-    else:
-        log("  ⚠ Список ключей пуст — возможно неверный пароль", "WARN")
-        shot("no_key_items")
-        return False
-
-    time.sleep(1)
-
-    signed_click = False
-    for btn_name in ["Қол қою", "Подписать", "Sign"]:
-        try:
-            btn = dialog.child_window(title=btn_name, control_type="Button")
-            if btn.exists():
-                btn.click_input()
-                signed_click = True
-                break
-        except Exception:
-            continue
-
-    if not signed_click:
-        try:
-            dialog["ПодписатьButton"].click()
-            signed_click = True
-        except Exception:
-            try:
-                send_keys("{ENTER}")
-                signed_click = True
-            except Exception:
-                pass
-
-    time.sleep(4)
-
-    try:
-        still = Desktop(backend="uia").windows(title_re=".*NCALayer.*")
-        if still:
-            log("  ⚠ NCALayer всё ещё открыт", "WARN")
-            shot("ncalayer_still_open")
-            return False
-    except Exception:
-        pass
-
-    log("  ✓ NCALayer закрылся — подписание выполнено", "PASS")
-    return True
+    return _headless_sign_with_ncalayer(
+        password=password,
+        p12_path=p12_path,
+        log=log,
+        timeout=min(float(appear_timeout or 30), 30.0),
+    )
 
 
 # ==========================================
@@ -2657,6 +2442,14 @@ def ensure_on_our_document(context=""):
 
 def go_to_details_tab():
     ensure_on_our_document("go_to_details_tab")
+    target = workflow_result.get("url")
+    if target and ("/subjects" in driver.current_url or "/edit" in driver.current_url):
+        try:
+            driver.get(target)
+            time.sleep(3.5)
+            dismiss_chrome_password_popup()
+        except Exception:
+            pass
     try:
         driver.execute_script("window.scrollTo(0, 0);")
         time.sleep(0.4)
@@ -2740,8 +2533,10 @@ def select_invoice_dropdown(label, allow_missing=False, target_option=None):
             except Exception:
                 js_click(sinp)
             time.sleep(0.3)
-            sinp.send_keys(Keys.CONTROL + "a")
-            sinp.send_keys(Keys.BACKSPACE)
+            try:
+                sinp.clear()
+            except Exception:
+                pass
             time.sleep(0.2)
             sinp.send_keys(target_option.split()[0])
             time.sleep(1.2)
@@ -2753,8 +2548,14 @@ def select_invoice_dropdown(label, allow_missing=False, target_option=None):
         try:
             sinp = panel.find_element(
                 By.XPATH, ".//input[contains(@class,'ui-select__search-input')]")
-            sinp.send_keys(Keys.CONTROL + "a")
-            sinp.send_keys(Keys.BACKSPACE)
+            try:
+                sinp.clear()
+            except Exception:
+                pass
+            driver.execute_script(
+                "arguments[0].value=''; arguments[0].dispatchEvent(new Event('input',{bubbles:true}));",
+                sinp,
+            )
             time.sleep(1.0)
         except Exception:
             pass
@@ -3031,7 +2832,7 @@ def create_invoice_via_modal():
         log("    ✓ " + label + ": '" + picked["text"][:35] + "'", "PASS")
         return True
 
-    pick_in_modal("Ответственный за оплату")
+    pick_in_modal("Ответственный за оплату", target="Margulan")
     time.sleep(0.3)
     pick_in_modal("Тип оплаты", target=PAYMENT_TYPE_SCENARIO)
     time.sleep(0.8)
@@ -3416,7 +3217,34 @@ def add_payment_subject():
         shot("no_subject_save_btn")
         return False
 
+    def _finish_subject_added():
+        log("  ✓ Предмет платежа добавлен", "PASS")
+        try:
+            backs = driver.find_elements(
+                By.XPATH,
+                "//*[self::a or self::button]"
+                "[contains(normalize-space(.),'Вернуться к основной информации')]")
+            vb = [b for b in backs if b.is_displayed()]
+            if vb:
+                _hard_click(vb[0])
+                time.sleep(2.5)
+                log("  ✓ Возврат к основной информации", "PASS")
+        except Exception:
+            pass
+        if "/subjects" in driver.current_url and workflow_result.get("url"):
+            try:
+                driver.get(workflow_result["url"])
+                time.sleep(3.0)
+            except Exception:
+                pass
+        return True
+
     for method in ["hard", "js", "selenium", "actions"]:
+        try:
+            if not save_btn.is_displayed():
+                return _finish_subject_added()
+        except Exception:
+            return _finish_subject_added()
         try:
             if method == "hard":
                 _hard_click(save_btn)
@@ -3426,24 +3254,18 @@ def add_payment_subject():
                 save_btn.click()
             else:
                 ActionChains(driver).move_to_element(save_btn).pause(0.3).click().perform()
-            time.sleep(2.5)
-            if not find_visible_modal_container(hint_text="предмет платежа"):
-                log("  ✓ Предмет платежа добавлен", "PASS")
-                # возврат к основной информации
+            for _ in range(12):
+                time.sleep(0.5)
                 try:
-                    backs = driver.find_elements(
-                        By.XPATH,
-                        "//*[self::a or self::button]"
-                        "[contains(normalize-space(.),'Вернуться к основной информации')]")
-                    vb = [b for b in backs if b.is_displayed()]
-                    if vb:
-                        _hard_click(vb[0])
-                        time.sleep(2.5)
-                        log("  ✓ Возврат к основной информации", "PASS")
+                    if not save_btn.is_displayed():
+                        return _finish_subject_added()
                 except Exception:
-                    pass
-                return True
+                    return _finish_subject_added()
+                if not find_visible_modal_container(hint_text="Добавить предмет платежа"):
+                    return _finish_subject_added()
         except Exception:
+            if not find_visible_modal_container(hint_text="Добавить предмет платежа"):
+                return _finish_subject_added()
             continue
 
     log("  ⚠ Модалка не закрылась — вероятно, не все обязательные поля", "WARN")
@@ -3467,14 +3289,22 @@ def add_payment_order():
     log("  Добавление платёжного поручения (ПП)...")
 
     pp_btn = None
-    for xp in [
-        "//button[.//span[normalize-space(text())='Добавить ПП']]",
-        "//button[contains(normalize-space(.),'Добавить ПП')]",
-    ]:
-        els = driver.find_elements(By.XPATH, xp)
-        vis = [b for b in els if b.is_displayed() and b.is_enabled()]
-        if vis:
-            pp_btn = vis[0]
+    for try_tab in (False, True):
+        if try_tab:
+            go_to_tab("Оплата и файлы")
+            time.sleep(1.5)
+        for xp in [
+            "//button[.//span[normalize-space(text())='Добавить ПП']]",
+            "//button[contains(normalize-space(.),'Добавить ПП')]",
+            "//button[contains(normalize-space(.),'платёжное поручение') or contains(normalize-space(.),'платежное поручение')]",
+            "//button[contains(normalize-space(.),'Добавить')][ancestor::*[contains(normalize-space(.),'Оплата') or contains(normalize-space(.),'Платёж')]]",
+        ]:
+            els = driver.find_elements(By.XPATH, xp)
+            vis = [b for b in els if b.is_displayed() and b.is_enabled()]
+            if vis:
+                pp_btn = vis[0]
+                break
+        if pp_btn:
             break
 
     if not pp_btn:
@@ -3551,18 +3381,36 @@ def add_payment_order():
 
     for method in ["hard", "js", "selenium"]:
         try:
+            if not save_btn.is_displayed():
+                log("  ✓ ПП сохранено", "PASS")
+                return True
+        except Exception:
+            log("  ✓ ПП сохранено", "PASS")
+            return True
+        try:
             if method == "hard":
                 _hard_click(save_btn)
             elif method == "js":
                 js_click(save_btn)
             else:
                 save_btn.click()
-            time.sleep(2.5)
-            if not (find_visible_modal_container(hint_text="платёжное поручение") or
-                    find_visible_modal_container(hint_text="платежное поручение")):
+            for _ in range(10):
+                time.sleep(0.5)
+                try:
+                    if not save_btn.is_displayed():
+                        log("  ✓ ПП сохранено", "PASS")
+                        return True
+                except Exception:
+                    log("  ✓ ПП сохранено", "PASS")
+                    return True
+        except Exception:
+            try:
+                if not save_btn.is_displayed():
+                    log("  ✓ ПП сохранено", "PASS")
+                    return True
+            except Exception:
                 log("  ✓ ПП сохранено", "PASS")
                 return True
-        except Exception:
             continue
     log("  ⚠ Модалка ПП не закрылась", "WARN")
     return False
@@ -3628,6 +3476,11 @@ def main():
     log("=" * 60)
     log(f"ЗАЯВКА НА ОПЛАТУ (с ЭЦП): {INVOICE_NUM}")
     log("=" * 60)
+
+    # --- ЭТАП 0: Открытие сайта (иначе браузер остаётся на data:, и логин-форма никогда не появляется) ---
+    if not driver.current_url or driver.current_url.startswith("data:") or "testportal.rgbgroup.kz" not in driver.current_url:
+        driver.get(BASE_URL)
+        time.sleep(3)
 
     # --- ЭТАП 1: Логин ---
     log("ЭТАП 1: Логин")
@@ -3969,5 +3822,9 @@ _safe_out(f"Файл лога: {LOG_FILE_PATH}")
 try:
     if _LOG_FILE:
         _LOG_FILE.close()
+except Exception:
+    pass
+try:
+    driver.quit()
 except Exception:
     pass

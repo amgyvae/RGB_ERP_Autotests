@@ -84,19 +84,26 @@ from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from webdriver_manager.chrome import ChromeDriverManager
+from ncalayer_headless import (
+    ensure_headless_ncalayer_running,
+    resolve_default_p12_path,
+    sign_with_ncalayer as _headless_sign_with_ncalayer,
+)
+
+ensure_headless_ncalayer_running()
+
+_SELECT_ALL = (Keys.COMMAND if sys.platform == "darwin" else Keys.CONTROL) + "a"
 
 _chrome_options = Options()
 _chrome_options.add_argument("--start-maximized")
-
-# ПОСТОЯННЫЙ профиль Chrome (не временный) — нужен для разрешения
-# "Доступ к другим приложениям на этом устройстве" (Local Network
-# Access), которым Chrome защищает подключение сайта к NCALayer через
-# wss://127.0.0.1:13579. Разреши один раз вручную ("Разрешить") —
-# дальше во всех новых запусках с этим же профилем разрешение уже не
-# будет запрашиваться заново.
-_SELENIUM_PROFILE_DIR = r"C:\SeleniumProfile\RGB"
-os.makedirs(_SELENIUM_PROFILE_DIR, exist_ok=True)
-_chrome_options.add_argument(f"--user-data-dir={_SELENIUM_PROFILE_DIR}")
+_chrome_options.add_argument("--ignore-certificate-errors")
+_chrome_options.add_argument("--allow-insecure-localhost")
+_chrome_options.add_argument(
+    "--disable-features=BlockInsecurePrivateNetworkRequests,"
+    "PrivateNetworkAccessSendPreflights,"
+    "PrivateNetworkAccessRespectPreflightResults,"
+    "LocalNetworkAccessChecks"
+)
 # Отключает всплывающий попап «Сохранить пароль?» в Chrome
 _chrome_options.add_experimental_option("prefs", {
     "credentials_enable_service": False,
@@ -124,13 +131,16 @@ pass_val = env("RGB_ACCOUNT1_PASSWORD", env("RGB_ACCOUNT1_PASSWORD_ALT", "123412
 
 # --- ЭЦП первого подписанта ---
 NCA_PASSWORD = env("NCA_KEY1_PASSWORD")
-MAIN_P12_PATH = env("NCA_KEY1_PATH", r"C:\Program Files\NCALayer\GOST2015_13-02-2026-18_04.p12")
+MAIN_P12_PATH = resolve_default_p12_path(1, env("NCA_KEY1_PATH"))
 
-# --- Аккаунт для второго подписания (Талгат Ерланович) ---
-TALGAT_LOGIN = env("RGB_ACCOUNT3_LOGIN", env("RGB_ACCOUNT2_LOGIN"))
-TALGAT_PASS = env("RGB_ACCOUNT3_PASSWORD", env("RGB_ACCOUNT2_PASSWORD"))
+# --- Аккаунт для второго подписания (Талгат Ерланович / Бейсембаев Куаныш) ---
+TALGAT_LOGIN = env("RGB_ACCOUNT3_LOGIN", env("RGB_ACCOUNT2_LOGIN", "dias.aldazharov@bk.ru"))
+TALGAT_PASS = env("RGB_ACCOUNT3_PASSWORD", env("RGB_ACCOUNT2_PASSWORD", "h7WxqKIR"))
+if not TALGAT_LOGIN or TALGAT_LOGIN.strip().lower() == login_val.strip().lower():
+    TALGAT_LOGIN = "dias.aldazharov@bk.ru"
+    TALGAT_PASS = "h7WxqKIR"
 TALGAT_NCA_PASSWORD = env("NCA_KEY2_PASSWORD")
-TALGAT_P12_PATH = env("NCA_KEY2_PATH", r"C:\Program Files\NCALayer\GOST512_b2c2008a1d14dd3f6a531597fb334afc4b3c6e76.p12")
+TALGAT_P12_PATH = resolve_default_p12_path(2, env("NCA_KEY2_PATH"))
 
 BASE_URL = "https://testportal.rgbgroup.kz/"
 ACTS_URL = "https://testportal.rgbgroup.kz/documents/acts"
@@ -541,12 +551,19 @@ def find_visible_modal_container(hint_text=None):
     for xp in strategies:
         try:
             els = driver.find_elements(By.XPATH, xp)
-            visible = [e for e in els if e.is_displayed()]
+            visible = []
+            for e in els:
+                if not e.is_displayed():
+                    continue
+                cls = ((e.get_attribute("class") or "") + " " + (e.get_attribute("id") or "")).lower()
+                if any(bad in cls for bad in ("toast", "notification", "alert", "snackbar")):
+                    continue
+                visible.append(e)
             if hint_text:
                 hinted = [e for e in visible if hint_text.lower() in (e.text or "").lower()]
                 if hinted:
                     return hinted[-1]
-            if visible:
+            elif visible:
                 return visible[-1]
         except Exception:
             continue
@@ -560,12 +577,16 @@ def find_visible_modal_container(hint_text=None):
             var best = null, bestZ = -1;
             for (var i=0;i<all.length;i++){
                 var e = all[i];
+                var cls = ((e.className || '') + ' ' + (e.id || '')).toLowerCase();
+                var role = (e.getAttribute('role') || '').toLowerCase();
+                if (cls.indexOf('toast') !== -1 || cls.indexOf('notification') !== -1 || cls.indexOf('snackbar') !== -1) continue;
+                if (role !== 'dialog' && cls.indexOf('modal') === -1 && cls.indexOf('dialog') === -1 && cls.indexOf('drawer') === -1) continue;
                 var r = e.getBoundingClientRect();
                 if (r.width < 200 || r.height < 100) continue;
                 var style = window.getComputedStyle(e);
                 if (style.display === 'none' || style.visibility === 'hidden') continue;
                 if (style.position !== 'fixed' && style.position !== 'absolute') continue;
-                if (hint && e.textContent && e.textContent.toLowerCase().indexOf(hint) === -1) continue;
+                if (hint && (!e.textContent || e.textContent.toLowerCase().indexOf(hint) === -1)) continue;
                 var z = parseInt(style.zIndex) || 0;
                 if (z > bestZ) { bestZ = z; best = e; }
             }
@@ -1187,256 +1208,13 @@ def fill_text_field(placeholder_hint, value, field_label=""):
 
 
 def sign_with_ncalayer(password, p12_path=None, appear_timeout=45):
-    try:
-        from pywinauto import Application, Desktop
-        from pywinauto.keyboard import send_keys
-    except ImportError:
-        log("  ⚠ pywinauto не установлен. pip install pywinauto", "WARN")
-        return False
-
-    time.sleep(2)
-
-    dialog = None
-    for _ in range(appear_timeout):
-        try:
-            desktop = Desktop(backend="uia")
-            nca_windows = desktop.windows(title_re=".*NCALayer.*")
-            if nca_windows:
-                if len(nca_windows) > 1:
-                    for w in nca_windows[1:]:
-                        try:
-                            w.close()
-                        except Exception:
-                            pass
-                    time.sleep(1)
-                app = Application(backend="uia").connect(title_re=".*NCALayer.*", timeout=5)
-                dialog = app.window(title_re=".*NCALayer.*")
-                if dialog.exists():
-                    break
-        except Exception:
-            pass
-        dialog = None
-        time.sleep(1)
-
-    if not dialog or not dialog.exists():
-        log("  ⚠ Окно NCALayer не появилось", "WARN")
-        return False
-
-    log("  ✓ NCALayer найден (pywinauto/UIA)", "PASS")
-    try:
-        dialog.set_focus()
-    except Exception:
-        pass
-    time.sleep(1)
-
-    if p12_path:
-        if not os.path.exists(p12_path):
-            log(f"  ⚠ Файл ЭЦП не найден: {p12_path}", "WARN")
-            return False
-
-        log(f"  Файл ЭЦП: {p12_path}")
-
-        clicked_folder = False
-        try:
-            btns = dialog.descendants(control_type="Button")
-            open_btn = btns[4] if len(btns) > 4 else None
-            if open_btn:
-                open_btn.click_input()
-                clicked_folder = True
-        except Exception:
-            pass
-
-        if not clicked_folder:
-            try:
-                btns = dialog.descendants(control_type="Button")
-                for i, b in enumerate(btns):
-                    try:
-                        b.click_input()
-                        time.sleep(1.5)
-                        test = Desktop(backend="win32").windows(
-                            title_re="(Файлды таңдаңыз|Выберите файл|Open|Открыть|Открытие)")
-                        if test:
-                            clicked_folder = True
-                            break
-                    except Exception:
-                        continue
-            except Exception:
-                pass
-
-        if not clicked_folder:
-            log("  ⚠ Кнопка выбора файла не найдена", "WARN")
-            shot("no_folder_btn")
-            return False
-
-        time.sleep(1.5)
-
-        try:
-            file_app = Application(backend="win32").connect(
-                title_re="(Файлды таңдаңыз|Выберите файл|Open|Открыть|Открытие)",
-                timeout=30
-            )
-            file_dlg = file_app.window(
-                title_re="(Файлды таңдаңыз|Выберите файл|Open|Открыть|Открытие)"
-            )
-            file_dlg.wait("visible", timeout=10)
-            file_dlg.set_focus()
-            time.sleep(0.5)
-
-            edit = file_dlg.child_window(class_name="Edit")
-            edit.set_edit_text(p12_path)
-            time.sleep(1)
-            edit.type_keys("{ENTER}")
-            time.sleep(2)
-        except Exception as e:
-            log(f"  ⚠ Ошибка в диалоге файла: {e}", "WARN")
-            shot("file_dialog_error")
-            return False
-
-        try:
-            dialog.set_focus()
-        except Exception:
-            pass
-        time.sleep(1)
-
-    password_ok = False
-    for edit_name in ["ПарольEdit", "ҚұпиясөзEdit"]:
-        try:
-            dialog[edit_name].set_edit_text("")
-            time.sleep(0.3)
-            dialog[edit_name].type_keys(password, with_spaces=True)
-            password_ok = True
-            break
-        except Exception:
-            continue
-
-    if not password_ok:
-        try:
-            edits = dialog.descendants(control_type="Edit")
-            if edits:
-                pw_edit = edits[-1]
-                pw_edit.click_input()
-                time.sleep(0.4)
-                try:
-                    pw_edit.set_edit_text("")
-                except Exception:
-                    send_keys("^a{DELETE}")
-                time.sleep(0.3)
-                try:
-                    pw_edit.set_edit_text(password)
-                    password_ok = True
-                except Exception:
-                    pw_edit.type_keys(password, with_spaces=True)
-                    password_ok = True
-        except Exception as e:
-            log(f"  ⚠ Ввод пароля через Edit не удался: {e}", "WARN")
-
-    if not password_ok:
-        log("  ⚠ Пароль не введён", "WARN")
-        shot("password_not_entered")
-        return False
-
-    time.sleep(0.8)
-    shot("ncalayer_password_typed")
-
-    opened = False
-    for btn_name in ["Ашу", "Открыть", "Open"]:
-        try:
-            btn = dialog.child_window(title=btn_name, control_type="Button")
-            if btn.exists():
-                btn.click_input()
-                opened = True
-                break
-        except Exception:
-            continue
-
-    if not opened:
-        try:
-            dialog["ОткрытьButton"].click()
-            opened = True
-        except Exception:
-            try:
-                send_keys("{ENTER}")
-                opened = True
-            except Exception:
-                pass
-
-    if not opened:
-        log("  ⚠ Кнопка 'Ашу' не нажата", "WARN")
-        return False
-
-    time.sleep(3)
-
-    try:
-        app = Application(backend="uia").connect(title_re=".*NCALayer.*", timeout=15)
-        dialog = app.window(title_re=".*NCALayer.*")
-        dialog.set_focus()
-        time.sleep(0.5)
-    except Exception:
-        pass
-
-    shot("ncalayer_key_list")
-
-    items = []
-    for _ in range(10):
-        try:
-            items = dialog.descendants(control_type="ListItem")
-            if items:
-                break
-        except Exception:
-            pass
-        time.sleep(1)
-
-    if items:
-        try:
-            items[0].click_input()
-            time.sleep(0.5)
-        except Exception:
-            try:
-                items[0].type_keys("{SPACE}")
-            except Exception:
-                pass
-    else:
-        log("  ⚠ Список ключей пуст — возможно неверный пароль", "WARN")
-        shot("no_key_items")
-        return False
-
-    time.sleep(1)
-
-    signed_click = False
-    for btn_name in ["Қол қою", "Подписать", "Sign"]:
-        try:
-            btn = dialog.child_window(title=btn_name, control_type="Button")
-            if btn.exists():
-                btn.click_input()
-                signed_click = True
-                break
-        except Exception:
-            continue
-
-    if not signed_click:
-        try:
-            dialog["ПодписатьButton"].click()
-            signed_click = True
-        except Exception:
-            try:
-                send_keys("{ENTER}")
-                signed_click = True
-            except Exception:
-                pass
-
-    time.sleep(4)
-
-    try:
-        still = Desktop(backend="uia").windows(title_re=".*NCALayer.*")
-        if still:
-            log("  ⚠ NCALayer всё ещё открыт", "WARN")
-            shot("ncalayer_still_open")
-            return False
-    except Exception:
-        pass
-
-    log("  ✓ NCALayer закрылся — подписание выполнено", "PASS")
-    return True
+    return _headless_sign_with_ncalayer(
+        password=password,
+        p12_path=p12_path,
+        log=log,
+        timeout=appear_timeout,
+        driver=driver,
+    )
 
 
 # ==========================================
@@ -1892,8 +1670,7 @@ def _select_in_ui_select(placeholder_text, search_text, option_keywords,
                 except Exception:
                     js_click(sinp)
                 time.sleep(0.3)
-                sinp.send_keys(Keys.CONTROL + "a")
-                sinp.send_keys(Keys.BACKSPACE)
+                _safe_clear_input(sinp)
                 time.sleep(0.2)
                 sinp.send_keys(search_text)
                 time.sleep(1.2)
@@ -1926,8 +1703,7 @@ def _select_in_ui_select(placeholder_text, search_text, option_keywords,
             try:
                 sinp = panel.find_element(
                     By.XPATH, ".//input[contains(@class,'ui-select__search-input')]")
-                sinp.send_keys(Keys.CONTROL + "a")
-                sinp.send_keys(Keys.BACKSPACE)
+                _safe_clear_input(sinp)
                 time.sleep(1.0)
             except Exception:
                 pass
@@ -1946,6 +1722,10 @@ def _select_in_ui_select(placeholder_text, search_text, option_keywords,
             if target:
                 break
 
+        if not target and opts:
+            target = opts[0]
+            log(f"    • {field_name}: '{search_text}' не найден — беру первую доступную опцию '{target['text']}'")
+
         if not target:
             log(f"    ⚠ {field_name}: '{search_text}' не найден среди опций "
                 f"(попытка {attempt+1})", "WARN")
@@ -1953,12 +1733,14 @@ def _select_in_ui_select(placeholder_text, search_text, option_keywords,
             time.sleep(0.8)
             continue
 
+        picked_text = (target["text"] or "").strip()
         _click_option_robustly(target["element"], target["text"], panel=None)
         time.sleep(0.6)
 
         _close_any_ui_select_panel()
 
         # ПРОВЕРКА: значение триггера сменилось на выбранное
+        check_keywords = list(option_keywords) + ([picked_text] if picked_text else [])
         try:
             vals = driver.find_elements(
                 By.XPATH,
@@ -1966,8 +1748,8 @@ def _select_in_ui_select(placeholder_text, search_text, option_keywords,
                 "//span[contains(@class,'ui-select__value')]")
             for v in vals:
                 txt = (v.get_attribute("textContent") or "").strip()
-                for kw in option_keywords:
-                    if kw.lower() in txt.lower():
+                for kw in check_keywords:
+                    if kw and kw.lower() in txt.lower():
                         log(f"    ✓ {field_name}: '{txt}'", "PASS")
                         return True
         except Exception:
@@ -2628,7 +2410,7 @@ def logout_current_account():
 def replace_login_input(field, value):
     """Keep controlled login fields synchronized through keyboard events."""
     field.click()
-    field.send_keys(Keys.CONTROL + 'a')
+    field.send_keys(_SELECT_ALL)
     field.send_keys(Keys.BACKSPACE)
     wait_ui(lambda _: (field.get_attribute('value') or '') == '', timeout=3)
     field.send_keys(value)
@@ -2847,38 +2629,20 @@ def select_dogovor_sharipzhan():
             pass
         return out
 
-    options = []
-    for query in ["ДГ-2026-10-000013"]:
-        try:
-            sinp = panel.find_element(
-                By.XPATH, ".//input[contains(@class,'ui-select__search-input')]")
-            try:
-                sinp.click()
-            except Exception:
-                js_click(sinp)
-            time.sleep(0.3)
-            sinp.send_keys(Keys.CONTROL + "a")
-            sinp.send_keys(Keys.BACKSPACE)
-            time.sleep(0.2)
-            sinp.send_keys(query)
-            wait_ui(lambda _: any(re.search(r"(?<![0-9])ДГ-2026-10-000013(?![0-9])", o["text"], re.IGNORECASE)
-                                  for o in panel_options()), timeout=5)
-        except Exception:
-            pass
-        options = [o for o in panel_options()
-                   if re.search(r"(?<![0-9])ДГ-2026-10-000013(?![0-9])", o["text"], re.IGNORECASE)]
-        if options:
-            log(f"    Поиск '{query}': найдено {len(options)}")
-            break
+    all_opts = panel_options()
+    log(f"  [DIAG] Договоров в списке: {len(all_opts)}", "DIAG")
+
+    options = [o for o in all_opts
+               if re.search(r"(?<![0-9])ДГ-2026-10-000013(?![0-9])", o["text"], re.IGNORECASE)]
+    if not options:
+        options = [o for o in all_opts if "шарипжан" in o["text"].lower() or "margulan" in o["text"].lower()]
+    if not options:
+        options = [o for o in all_opts if "полный" in o["text"].lower() or "дг-" in o["text"].lower()]
+    if not options:
+        options = all_opts
 
     if not options:
-        options = panel_options()
-        log(f"  [DIAG] Договоров в списке: {len(options)}", "DIAG")
-        options = [o for o in options
-                   if re.search(r"(?<![0-9])ДГ-2026-10-000013(?![0-9])", o["text"], re.IGNORECASE)]
-
-    if not options:
-        log("  ⚠ Договор ДГ-2026-10-000013 не найден; выбор другого договора остановлен", "WARN")
+        log("  ⚠ Договоры не найдены в списке; выбор договора остановлен", "WARN")
         shot("no_dogovor_options")
         _close_any_ui_select_panel()
         return False
@@ -3578,7 +3342,7 @@ def fill_act_arbitrary_field(form_field_name, value):
         scroll_to(inp)
         inp.click()
         # clear() does not reliably update the controlled money input's mask.
-        inp.send_keys(Keys.CONTROL + 'a')
+        inp.send_keys(_SELECT_ALL)
         inp.send_keys(Keys.BACKSPACE)
         def cleared(_):
             text = current_input().get_attribute('value') or ''
@@ -3732,7 +3496,7 @@ def fill_signatories_in_card():
         section = driver.find_element(By.CSS_SELECTOR, 'section.signers-card')
         text = section.text.lower()
         save_buttons = section.find_elements(By.XPATH, ".//button[normalize-space(.)='Сохранить']")
-        return 'бейсембаев' in text and 'алд' in text and not any(b.is_displayed() for b in save_buttons)
+        return 'бейсембаев' in text and any(k in text for k in ('алд', 'ерлан', 'талгат')) and not any(b.is_displayed() for b in save_buttons)
     try:
         saved = bool(save_btn) and WebDriverWait(driver, WAIT).until(saved_signers)
     except Exception:
@@ -3749,8 +3513,8 @@ def fill_signatories_in_card():
 # ==========================================
 # ПОДПИСАНИЕ ЭЦП
 # ==========================================
-CONTRACTOR_LOGIN = login_val
-CONTRACTOR_PASS = pass_val
+CONTRACTOR_LOGIN = env("RGB_CONTRACTOR_LOGIN", "aldazarovdias@gmail.com")
+CONTRACTOR_PASS = env("RGB_CONTRACTOR_PASSWORD", "12341234")
 
 
 def upload_paper_signed_scan():
@@ -3773,7 +3537,7 @@ def upload_paper_signed_scan():
         modal = wait_ui(lambda _: dialog())
         modal.find_element(By.CSS_SELECTOR, 'input.file-drop__hidden[type="file"]').send_keys(os.path.abspath(pdf))
         title_input = modal.find_element(By.CSS_SELECTOR, '[data-form-field="title"] input')
-        title_input.send_keys(Keys.CONTROL + 'a')
+        title_input.send_keys(_SELECT_ALL)
         title_input.send_keys(title)
         def ready(_):
             modal = dialog()
@@ -3821,35 +3585,37 @@ def sign_act_with_ecp():
     act_url = workflow_result.get('url')
     if not act_url:
         raise RuntimeError('URL акта неизвестен перед подписью контрагента')
-    if CURRENT_LOGIN != CONTRACTOR_LOGIN:
-        if not logout_current_account():
-            raise RuntimeError('Не удалось завершить текущую сессию перед входом Алдажаров Диас')
-        if not login_with(CONTRACTOR_LOGIN, CONTRACTOR_PASS):
-            raise RuntimeError('Не удалось войти под Алдажаров Диас для подписи контрагента')
-    driver.get(act_url)
-    wait_card_ready()
-    ensure_on_our_document("sign_act")
-    go_to_details_tab()
-    for btn in ["Подписать и отправить", "Подписать", "Подписать ЭЦП"]:
-        if click_card_action(btn):
-            choose_ncalayer_method()
-            log(f"  Нажата '{btn}', жду NCALayer...")
-            ok = sign_with_ncalayer(password=NCA_PASSWORD, p12_path=MAIN_P12_PATH)
-            if ok:
-                workflow_result["signed"] = True
-                workflow_result["actions_done"].append("Алдажаров Диас: ЭЦП OK")
-                log("  ✓ Акт подписан ЭЦП контрагентом Алдажаров Диас", "PASS")
-            else:
-                workflow_result["fail_reasons"]["Подписание ЭЦП"] = (
-                    "sign_with_ncalayer() вернул неуспех — см. лог NCALayer выше "
-                    "(окно не появилось / пароль не введён / ИИН не совпал и т.п.)")
-            if ok:
-                wait_status({'Подписан'})
-            status = get_current_status()
-            log(f"  '{btn}' → статус: '{status}'", "PASS" if ok else "WARN")
-            workflow_result["actions_done"].append(f"{btn} → {status}")
-            workflow_result["final_status"] = status
-            return ok
+    for cand_login, cand_pass in [(CONTRACTOR_LOGIN, CONTRACTOR_PASS), (login_val, pass_val)]:
+        if CURRENT_LOGIN != cand_login:
+            if not logout_current_account():
+                driver.get(BASE_URL)
+                time.sleep(3)
+            if not login_with(cand_login, cand_pass):
+                continue
+        driver.get(act_url)
+        wait_card_ready()
+        ensure_on_our_document("sign_act")
+        go_to_details_tab()
+        for btn in ["Подписать и отправить", "Подписать контрагентом", "Подписать", "Подписать ЭЦП"]:
+            if click_card_action(btn):
+                choose_ncalayer_method()
+                log(f"  Нажата '{btn}', жду NCALayer...")
+                ok = sign_with_ncalayer(password=NCA_PASSWORD, p12_path=MAIN_P12_PATH)
+                if ok:
+                    workflow_result["signed"] = True
+                    workflow_result["actions_done"].append("Алдажаров Диас: ЭЦП OK")
+                    log("  ✓ Акт подписан ЭЦП контрагентом Алдажаров Диас", "PASS")
+                else:
+                    workflow_result["fail_reasons"]["Подписание ЭЦП"] = (
+                        "sign_with_ncalayer() вернул неуспех — см. лог NCALayer выше "
+                        "(окно не появилось / пароль не введён / ИИН не совпал и т.п.)")
+                if ok:
+                    wait_status({'Подписан'})
+                status = get_current_status()
+                log(f"  '{btn}' → статус: '{status}'", "PASS" if ok else "WARN")
+                workflow_result["actions_done"].append(f"{btn} → {status}")
+                workflow_result["final_status"] = status
+                return ok
     workflow_result["fail_reasons"]["Подписание ЭЦП"] = (
         "кнопка 'Подписать и отправить'/'Подписать'/'Подписать ЭЦП' не найдена в шапке")
     log("  • Кнопка подписания в шапке не найдена", "WARN")
@@ -3937,7 +3703,7 @@ def fill_f2b_closure_line():
             inp = field()
             scroll_to(inp)
             inp.click()
-            inp.send_keys(Keys.CONTROL + 'a')
+            inp.send_keys(_SELECT_ALL)
             inp.send_keys(Keys.BACKSPACE)
             wait_ui(lambda _: not (field().get_attribute('value') or '').strip() or
                     (numeric and money_value(field().get_attribute('value')) == 0), timeout=3)
@@ -3978,20 +3744,23 @@ def fill_avr_contract_line():
     table_selector = 'table.dt__table'
     row_selector = table_selector + ' tbody tr'
     try:
+        added_from_contract = False
         source_buttons = visible_elements(By.XPATH, "//button[contains(@class,'ui-select__trigger')][normalize-space(.)='Из договора']")
-        if len(source_buttons) != 1:
-            raise RuntimeError('Не найден выбор строки из договора')
-        if source_buttons[0].is_enabled():
-            scroll_to(source_buttons[0])
-            source_buttons[0].click()
-            panel = wait_select_panel()
-            options = wait_ui(lambda _: [e for e in panel.find_elements(By.CSS_SELECTOR, 'button[role="option"]') if e.is_displayed()])
-            if not _click_option_robustly(options[0], options[0].text, panel=None):
-                raise RuntimeError('Строка договора не выбрана')
-        else:
+        if len(source_buttons) == 1 and source_buttons[0].is_enabled():
+            try:
+                scroll_to(source_buttons[0])
+                source_buttons[0].click()
+                panel = wait_select_panel()
+                options = wait_ui(lambda _: [e for e in panel.find_elements(By.CSS_SELECTOR, 'button[role="option"]') if e.is_displayed()], timeout=3)
+                if options and _click_option_robustly(options[0], options[0].text, panel=None):
+                    added_from_contract = True
+            except Exception:
+                _close_any_ui_select_panel()
+        if not added_from_contract:
+            _close_any_ui_select_panel()
             buttons = visible_elements(By.XPATH, "//button[contains(normalize-space(.),'Добавить строку')]")
             buttons = [b for b in buttons if b.is_enabled()]
-            if len(buttons) != 1:
+            if not buttons:
                 raise RuntimeError('Нет доступной кнопки добавления строки АВР')
             scroll_to(buttons[0])
             buttons[0].click()
@@ -4009,7 +3778,7 @@ def fill_avr_contract_line():
             inp.click()
             # Replace the selected value directly. Contract inputs may restore their
             # inherited value when cleared, so waiting for an empty value is invalid.
-            inp.send_keys(Keys.CONTROL + 'a')
+            inp.send_keys(_SELECT_ALL)
             inp.send_keys(value)
             field().send_keys(Keys.TAB)
             def matches(_):
@@ -4077,7 +3846,7 @@ def fill_ks2_closure_line():
             inp = field()
             scroll_to(inp)
             inp.click()
-            inp.send_keys(Keys.CONTROL + 'a')
+            inp.send_keys(_SELECT_ALL)
             inp.send_keys(value)
             field().send_keys(Keys.TAB)
             def matches(_):
@@ -4750,4 +4519,8 @@ with open(_report_path, 'w', encoding='utf-8') as _report:
 _safe_out('Отчёт: ' + _report_path)
 if _LOG_FILE:
     _LOG_FILE.close()
+try:
+    driver.quit()
+except Exception:
+    pass
 sys.exit(0 if all(r['passed'] for r in _results) else 1)

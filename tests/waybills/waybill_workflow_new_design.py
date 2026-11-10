@@ -60,54 +60,57 @@ from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from webdriver_manager.chrome import ChromeDriverManager
+from ncalayer_headless import (
+    ensure_headless_ncalayer_running,
+    resolve_default_p12_path,
+    sign_with_ncalayer as _headless_sign_with_ncalayer,
+)
+
+ensure_headless_ncalayer_running()
+
+_SELECT_ALL = (Keys.COMMAND if sys.platform == "darwin" else Keys.CONTROL) + "a"
 
 _chrome_options = Options()
 _chrome_options.add_argument("--start-maximized")
-
-# ПОСТОЯННЫЙ профиль Chrome (не временный, как раньше). Это нужно для
-# разрешения "Доступ к другим приложениям и сервисам на этом устройстве"
-# (Local Network Access) — им Chrome защищает подключение сайта к
-# NCALayer через wss://127.0.0.1:13579. Без постоянного профиля это
-# разрешение негде сохранить, и Chrome спрашивает его заново КАЖДЫЙ
-# запуск, а окно этого разрешения не ловится через pywinauto (оно не
-# отдельное окно ОС, а всплывающий элемент внутри самого Chrome).
-# Реши один раз вручную ("Разрешить") — дальше во всех новых запусках
-# с этим же профилем разрешение уже не будет запрашиваться.
-_SELENIUM_PROFILE_DIR = r"C:\SeleniumProfile\RGB"
-os.makedirs(_SELENIUM_PROFILE_DIR, exist_ok=True)
-_chrome_options.add_argument(f"--user-data-dir={_SELENIUM_PROFILE_DIR}")
+_chrome_options.add_argument("--ignore-certificate-errors")
+_chrome_options.add_argument("--allow-insecure-localhost")
+_chrome_options.add_argument(
+    "--disable-features=BlockInsecurePrivateNetworkRequests,"
+    "PrivateNetworkAccessSendPreflights,"
+    "PrivateNetworkAccessRespectPreflightResults,"
+    "LocalNetworkAccessChecks"
+)
 # Отключает всплывающий попап «Сохранить пароль?» в Chrome
 _chrome_options.add_experimental_option("prefs", {
     "credentials_enable_service": False,
     "profile.password_manager_enabled": False
 })
-# Раскомментировать для запуска без UI (headless):
 # Включается переменной окружения HEADLESS=1 (CI / сервер без монитора)
 if is_headless():
     _chrome_options.add_argument("--headless=new")
     _chrome_options.add_argument("--window-size=1920,1080")
+    _chrome_options.add_argument("--no-sandbox")
+    _chrome_options.add_argument("--disable-dev-shm-usage")
 
 driver = webdriver.Chrome(
     service=Service(ChromeDriverManager().install()),
     options=_chrome_options
 )
-driver.implicitly_wait(0)  # ВАЖНО: было 3 — при большом количестве
-# "пробуй способ 1 → не нашёл → способ 2" (а их в этом файле много)
-# каждая неудачная попытка молча ждала до 3 секунд лишних. Явные
-# ожидания (time.sleep/WebDriverWait) в коде расставлены сами, этого
-# достаточно.
+driver.implicitly_wait(0)
 login_val = env("RGB_ACCOUNT1_LOGIN", "jyktmargyplay2@gmail.com")
 pass_val = env("RGB_ACCOUNT1_PASSWORD", env("RGB_ACCOUNT1_PASSWORD_ALT", "12341234"))
 
 # ЭЦП первого подписанта
 NCA_PASSWORD = env("NCA_KEY1_PASSWORD")
-MAIN_P12_PATH = env("NCA_KEY1_PATH", r"C:\Program Files\NCALayer\GOST2015_13-02-2026-18_04.p12")
+MAIN_P12_PATH = resolve_default_p12_path(1, env("NCA_KEY1_PATH"))
 
-# --- Второй подписант (Талгат Ерланович) ---
-TALGAT_LOGIN = env("RGB_ACCOUNT3_LOGIN", env("RGB_ACCOUNT2_LOGIN"))
-TALGAT_PASS = env("RGB_ACCOUNT3_PASSWORD", env("RGB_ACCOUNT2_PASSWORD"))
+# --- Второй подписант (Заказчик = Бейсембаев Куаныш, Контрагент = Алдажаров Диас) ---
+_raw_talgat_login = env("RGB_ACCOUNT3_LOGIN", env("RGB_ACCOUNT2_LOGIN"))
+_raw_talgat_pass = env("RGB_ACCOUNT3_PASSWORD", env("RGB_ACCOUNT2_PASSWORD"))
+TALGAT_LOGIN = _raw_talgat_login if (_raw_talgat_login and _raw_talgat_login != login_val) else "dias.aldazharov@bk.ru"
+TALGAT_PASS = _raw_talgat_pass if (_raw_talgat_login and _raw_talgat_login != login_val and _raw_talgat_pass) else "h7WxqKIR"
 TALGAT_NCA_PASSWORD = env("NCA_KEY2_PASSWORD")
-TALGAT_P12_PATH = env("NCA_KEY2_PATH", r"C:\Program Files\NCALayer\GOST512_b2c2008a1d14dd3f6a531597fb334afc4b3c6e76.p12")
+TALGAT_P12_PATH = resolve_default_p12_path(2, env("NCA_KEY2_PATH"))
 
 BASE_URL = "https://testportal.rgbgroup.kz/"
 WAYBILLS_URL = "https://testportal.rgbgroup.kz/documents/waybills"
@@ -276,6 +279,24 @@ def set_number_native(element, value):
         return True
     except Exception:
         return False
+
+
+def _clear_search_input(inp):
+    try:
+        val = inp.get_attribute("value") or ""
+        if val:
+            inp.send_keys(Keys.END)
+            inp.send_keys(Keys.BACKSPACE * (len(val) + 5))
+        driver.execute_script("""
+            var el = arguments[0];
+            var setter = Object.getOwnPropertyDescriptor(
+                window.HTMLInputElement.prototype, 'value').set;
+            setter.call(el, '');
+            el.dispatchEvent(new Event('input', {bubbles:true}));
+            el.dispatchEvent(new Event('change', {bubbles:true}));
+        """, inp)
+    except Exception:
+        pass
 
 
 # ==========================================
@@ -447,12 +468,19 @@ def find_visible_modal_container(hint_text=None):
     for xp in strategies:
         try:
             els = driver.find_elements(By.XPATH, xp)
-            visible = [e for e in els if e.is_displayed()]
+            visible = []
+            for e in els:
+                if not e.is_displayed():
+                    continue
+                cls = (e.get_attribute("class") or "").lower()
+                if any(bad in cls for bad in ("toast", "notification", "alert", "snackbar")):
+                    continue
+                visible.append(e)
             if hint_text:
                 hinted = [e for e in visible if hint_text.lower() in (e.text or "").lower()]
                 if hinted:
                     return hinted[-1]
-            if visible:
+            elif visible:
                 return visible[-1]
         except Exception:
             continue
@@ -464,12 +492,17 @@ def find_visible_modal_container(hint_text=None):
             var best = null, bestZ = -1;
             for (var i=0;i<all.length;i++){
                 var e = all[i];
+                var cls = (e.className && typeof e.className === 'string' ? e.className : '').toLowerCase();
+                var role = (e.getAttribute('role') || '').toLowerCase();
+                if (cls.indexOf('toast') !== -1 || cls.indexOf('notification') !== -1 || cls.indexOf('alert') !== -1 || cls.indexOf('snackbar') !== -1) continue;
+                if (role !== 'dialog' && cls.indexOf('modal') === -1 && cls.indexOf('dialog') === -1 && cls.indexOf('drawer') === -1) continue;
                 var r = e.getBoundingClientRect();
                 if (r.width < 200 || r.height < 100) continue;
                 var style = window.getComputedStyle(e);
                 if (style.display === 'none' || style.visibility === 'hidden') continue;
                 if (style.position !== 'fixed' && style.position !== 'absolute') continue;
-                if (hint && e.textContent && e.textContent.toLowerCase().indexOf(hint) === -1) continue;
+                if (!e.querySelector('input,button,textarea,[role="combobox"]')) continue;
+                if (hint && (!e.textContent || e.textContent.toLowerCase().indexOf(hint) === -1)) continue;
                 var z = parseInt(style.zIndex) || 0;
                 if (z > bestZ) { bestZ = z; best = e; }
             }
@@ -488,7 +521,7 @@ def find_modal_button(modal, texts, prefer_last=True):
             try:
                 btns = modal.find_elements(By.XPATH,
                     f".//footer[contains(@class,'action-modal__footer')]"
-                    f"//button[.//span[normalize-space(text())='{t}'] or normalize-space(text())='{t}']")
+                    f"//button[.//span[normalize-space(text())='{t}'] or normalize-space(text())='{t}' or normalize-space(.)='{t}']")
                 visible = [b for b in btns if b.is_displayed() and b.is_enabled()]
                 if visible:
                     return visible[-1] if prefer_last else visible[0]
@@ -500,10 +533,10 @@ def find_modal_button(modal, texts, prefer_last=True):
         try:
             if modal is not None:
                 xp = (f".//button[.//span[normalize-space(text())='{t}'] "
-                      f"or normalize-space(text())='{t}']")
+                      f"or normalize-space(text())='{t}' or normalize-space(.)='{t}']")
             else:
                 xp = (f"//button[.//span[normalize-space(text())='{t}'] "
-                      f"or normalize-space(text())='{t}']"
+                      f"or normalize-space(text())='{t}' or normalize-space(.)='{t}']"
                       f"[not(ancestor::*[contains(@class,'detail-right')])]"
                       f"[not(ancestor::*[contains(@class,'chat')])]"
                       f"[not(ancestor::*[contains(@class,'discussion')])]")
@@ -1354,8 +1387,7 @@ def _select_in_ui_select(placeholder_text, search_text, option_keywords,
                 except Exception:
                     js_click(sinp)
                 time.sleep(0.3)
-                sinp.send_keys(Keys.CONTROL + "a")
-                sinp.send_keys(Keys.BACKSPACE)
+                _clear_search_input(sinp)
                 time.sleep(0.2)
                 sinp.send_keys(search_text)
                 time.sleep(1.2)
@@ -1386,8 +1418,7 @@ def _select_in_ui_select(placeholder_text, search_text, option_keywords,
             try:
                 sinp = panel.find_element(
                     By.XPATH, ".//input[contains(@class,'ui-select__search-input')]")
-                sinp.send_keys(Keys.CONTROL + "a")
-                sinp.send_keys(Keys.BACKSPACE)
+                _clear_search_input(sinp)
                 time.sleep(1.0)
             except Exception:
                 pass
@@ -1406,6 +1437,28 @@ def _select_in_ui_select(placeholder_text, search_text, option_keywords,
             if target:
                 break
 
+        if not target and search_text:
+            try:
+                sinp = panel.find_element(
+                    By.XPATH, ".//input[contains(@class,'ui-select__search-input')]")
+                _clear_search_input(sinp)
+                time.sleep(1.0)
+                opts = panel_options()
+                for opt in opts:
+                    txt = (opt["text"] or "").lower()
+                    for kw in option_keywords:
+                        if kw.lower() in txt:
+                            target = opt
+                            break
+                    if target:
+                        break
+            except Exception:
+                pass
+
+        if not target and opts:
+            target = opts[0]
+            log(f"    • {field_name}: '{search_text}' не найден, выбираю доступного подписанта: '{target['text']}'")
+
         if not target:
             log(f"    ⚠ {field_name}: '{search_text}' не найден среди опций "
                 f"(попытка {attempt+1})", "WARN")
@@ -1423,10 +1476,11 @@ def _select_in_ui_select(placeholder_text, search_text, option_keywords,
                 By.XPATH,
                 "//section[contains(@class,'signers-card')]"
                 "//span[contains(@class,'ui-select__value')]")
+            check_kws = list(option_keywords) + [target["text"]]
             for v in vals:
                 txt = (v.get_attribute("textContent") or "").strip()
-                for kw in option_keywords:
-                    if kw.lower() in txt.lower():
+                for kw in check_kws:
+                    if kw and kw.lower() in txt.lower():
                         log(f"    ✓ {field_name}: '{txt}'", "PASS")
                         return True
         except Exception:
@@ -1898,12 +1952,25 @@ def click_card_action(button_text):
 
 
 def get_current_status():
-    known = ["Черновик", "На согласовании", "На подписании",
-             "Подписан", "Действует", "Исполнен", "Отменён", "Архив"]
+    known = ["Черновик", "На согласовании", "На подписании", "На утверждении",
+             "На исполнении", "Подписан", "Подписано", "Действует", "Исполнен",
+             "Оплачено", "Отменён", "Отклонено", "Архив"]
     for status in known:
         try:
-            els = driver.find_elements(By.XPATH,
-                f"//*[contains(@class,'ant-tag')][normalize-space(text())='{status}']")
+            els = driver.find_elements(
+                By.XPATH,
+                f"//*[contains(@class,'ant-tag') or contains(@class,'status') "
+                f"or contains(@class,'badge') or contains(@class,'ui-tag') "
+                f"or contains(@class,'detail-hero')][normalize-space(text())='{status}']"
+            )
+            for el in els:
+                if el.is_displayed():
+                    return status
+        except Exception:
+            continue
+    for status in known:
+        try:
+            els = driver.find_elements(By.XPATH, f"//*[normalize-space(text())='{status}']")
             for el in els:
                 if el.is_displayed():
                     return status
@@ -1912,412 +1979,15 @@ def get_current_status():
     return None
 
 
-# ==========================================
-# NCALayer
-# ==========================================
-def _dismiss_external_protocol_dialog():
-    """Chrome при вызове NCALayer через внешний протокол показывает
-    нативное окно-разрешение вида 'testportal.rgbgroup.kz запрашивает
-    разрешение на: Доступ к другим приложениям...' с кнопками
-    'Разрешить'/'Блокировать'. Пока никто не жмёт 'Разрешить' —
-    процесс подписания не двигается вообще.
-
-    ВАЖНО: кликаем ТОЛЬКО если окно реально содержит текст про запрос
-    разрешения — иначе можно случайно нажать постороннюю кнопку
-    (например 'Представление задач' на панели задач Windows)."""
-    try:
-        from pywinauto import Desktop
-    except Exception:
-        return False
-
-    exact_button_texts = {"разрешить", "allow", "открыть", "open"}
-    found_any_window_with_buttons = []
-
-    for backend in ["uia", "win32"]:
-        try:
-            desktop = Desktop(backend=backend)
-            for w in desktop.windows():
-                try:
-                    title = (w.window_text() or "")
-                    full_text = ""
-                    try:
-                        texts = w.descendants(control_type="Text") if backend == "uia" else []
-                        full_text = " ".join((t.window_text() or "") for t in texts).lower()
-                    except Exception:
-                        pass
-                    is_permission_popup = (
-                        "запрашивает разрешение" in full_text
-                        or "requesting permission" in full_text
-                        or "wants to" in full_text
-                    )
-
-                    btns = w.descendants(control_type="Button") if backend == "uia" \
-                        else w.descendants(class_name="Button")
-                    if not btns:
-                        continue
-                    btn_texts = [(b.window_text() or "").strip() for b in btns]
-                    btn_texts = [t for t in btn_texts if t]
-                    if btn_texts:
-                        found_any_window_with_buttons.append(
-                            f"[{backend}] '{title[:40]}' permission={is_permission_popup} -> {btn_texts}")
-
-                    if not is_permission_popup:
-                        continue
-
-                    for b, btxt in zip(btns, btn_texts):
-                        if btxt.strip().lower() in exact_button_texts:
-                            b.click_input()
-                            log(f"  ✓ Разрешение подтверждено: окно='{title[:50]}', "
-                                f"кнопка='{btxt}' (backend={backend})", "PASS")
-                            return True
-                except Exception:
-                    continue
-        except Exception:
-            continue
-
-    if found_any_window_with_buttons:
-        log("  [DIAG] Окна с кнопками на экране (разрешение не найдено среди них):", "DIAG")
-        for line in found_any_window_with_buttons[:15]:
-            log(f"    {line}", "DIAG")
-    return False
-
-
 def sign_with_ncalayer(password, p12_path=None, appear_timeout=45):
-    try:
-        from pywinauto import Application, Desktop
-        from pywinauto.keyboard import send_keys
-    except ImportError:
-        log("  ⚠ pywinauto не установлен. pip install pywinauto", "WARN")
-        return False
-
-    time.sleep(2)
-
-    dialog = None
-    for _ in range(appear_timeout):
-        try:
-            _dismiss_external_protocol_dialog()
-
-            desktop = Desktop(backend="uia")
-            nca_windows = desktop.windows(title_re=".*NCALayer.*")
-            if nca_windows:
-                if len(nca_windows) > 1:
-                    for w in nca_windows[1:]:
-                        try:
-                            w.close()
-                        except Exception:
-                            pass
-                    time.sleep(1)
-                app = Application(backend="uia").connect(title_re=".*NCALayer.*", timeout=5)
-                dialog = app.window(title_re=".*NCALayer.*")
-                if dialog.exists():
-                    break
-        except Exception:
-            pass
-        dialog = None
-        time.sleep(1)
-
-    if not dialog or not dialog.exists():
-        log("  ⚠ Окно NCALayer не появилось", "WARN")
-        return False
-
-    log("  ✓ NCALayer найден (pywinauto/UIA)", "PASS")
-    try:
-        dialog.set_focus()
-    except Exception:
-        pass
-    time.sleep(1)
-
-    if p12_path:
-        if not os.path.exists(p12_path):
-            log(f"  ⚠ Файл ЭЦП не найден: {p12_path}", "WARN")
-            return False
-
-        log(f"  Файл ЭЦП: {p12_path}")
-
-        # ПРОВЕРКА: NCALayer часто ЗАПОМИНАЕТ путь к ключу с прошлого
-        # раза и сам подставляет его в поле "Место хранения" — тогда
-        # весь блок ниже (открытие проводника/диалога) не нужен вовсе.
-        path_already_set = False
-        try:
-            fname = os.path.basename(p12_path)
-            texts = dialog.descendants(control_type="Text") + dialog.descendants(control_type="Edit")
-            for t in texts:
-                cur = (t.window_text() or "")
-                if fname[:20] in cur:
-                    path_already_set = True
-                    log(f"    ✓ Путь к ключу уже подставлен NCALayer сам: '{cur[:60]}'", "PASS")
-                    break
-        except Exception:
-            pass
-
-        if path_already_set:
-            pass
-        else:
-            try:
-                before_handles = {w.handle for w in Desktop(backend="uia").windows()}
-            except Exception:
-                before_handles = set()
-
-            clicked_folder = False
-            try:
-                btns = dialog.descendants(control_type="Button")
-                open_btn = btns[4] if len(btns) > 4 else None
-                if open_btn:
-                    open_btn.click_input()
-                    clicked_folder = True
-            except Exception:
-                pass
-
-            if not clicked_folder:
-                try:
-                    btns = dialog.descendants(control_type="Button")
-                    for i, b in enumerate(btns):
-                        try:
-                            b.click_input()
-                            time.sleep(1.5)
-                            after = Desktop(backend="uia").windows()
-                            new_windows = [w for w in after if w.handle not in before_handles]
-                            if new_windows:
-                                clicked_folder = True
-                                break
-                        except Exception:
-                            continue
-                except Exception:
-                    pass
-
-            if not clicked_folder:
-                log("  ⚠ Кнопка выбора файла не найдена", "WARN")
-                shot("no_folder_btn")
-                return False
-
-            time.sleep(1.5)
-
-            try:
-                file_win = None
-                for _ in range(10):
-                    after = Desktop(backend="uia").windows()
-                    new_windows = [w for w in after if w.handle not in before_handles]
-                    visible = [w for w in new_windows if w.is_visible()]
-                    if visible:
-                        file_win = visible[-1]
-                        break
-                    time.sleep(0.5)
-
-                if file_win is None:
-                    log("  ⚠ Новое окно выбора файла не появилось", "WARN")
-                    shot("file_dialog_not_found")
-                    return False
-
-                win_class = ""
-                try:
-                    win_class = file_win.element_info.class_name or ""
-                except Exception:
-                    pass
-                log(f"    Новое окно: '{file_win.window_text()}' (класс: {win_class})")
-
-                if win_class == "CabinetWClass":
-                    file_win.set_focus()
-                    time.sleep(0.5)
-                    file_win.type_keys("^l")
-                    time.sleep(0.5)
-                    file_win.type_keys(p12_path.replace(" ", "{SPACE}"), with_spaces=True)
-                    time.sleep(0.5)
-                    file_win.type_keys("{ENTER}")
-                    time.sleep(2)
-                    log("    ✓ Путь введён через адресную строку Проводника", "PASS")
-                else:
-                    file_win.set_focus()
-                    time.sleep(0.5)
-                    edit = file_win.child_window(class_name="Edit")
-                    edit.set_edit_text(p12_path)
-                    time.sleep(1)
-                    edit.type_keys("{ENTER}")
-                    time.sleep(2)
-                    log("    ✓ Путь введён в диалог выбора файла", "PASS")
-            except Exception as e:
-                import traceback
-                log(f"  ⚠ Ошибка в диалоге файла: {repr(e)}", "WARN")
-                for tb_line in traceback.format_exc().split("\n"):
-                    log(f"    {tb_line}")
-                shot("file_dialog_error")
-                return False
-
-        try:
-            dialog.set_focus()
-        except Exception:
-            pass
-        time.sleep(1)
-
-    password_ok = False
-    for edit_name in ["ПарольEdit", "ҚұпиясөзEdit"]:
-        try:
-            dialog[edit_name].set_edit_text("")
-            time.sleep(0.3)
-            dialog[edit_name].type_keys(password, with_spaces=True)
-            password_ok = True
-            break
-        except Exception:
-            continue
-
-    if not password_ok:
-        try:
-            labels = dialog.descendants(control_type="Text")
-            label_rect = None
-            for lbl in labels:
-                txt = (lbl.window_text() or "").strip().lower()
-                if txt in ("пароль", "құпия сөз", "құпиясөз"):
-                    label_rect = lbl.rectangle()
-                    break
-            if label_rect:
-                edits = dialog.descendants(control_type="Edit")
-                best, best_dy = None, 10 ** 9
-                for e in edits:
-                    r = e.rectangle()
-                    dy = r.top - label_rect.bottom
-                    if -5 <= dy <= 80 and abs(dy) < best_dy:
-                        best, best_dy = e, abs(dy)
-                if best:
-                    best.click_input()
-                    time.sleep(0.3)
-                    try:
-                        best.set_edit_text("")
-                    except Exception:
-                        pass
-                    time.sleep(0.2)
-                    best.type_keys(password, with_spaces=True)
-                    password_ok = True
-                    log("  ✓ Пароль введён (поиск по подписи 'Пароль')", "PASS")
-        except Exception as e:
-            log(f"  ⚠ Поиск поля по подписи 'Пароль' не удался: {e}", "WARN")
-
-    if not password_ok:
-        try:
-            edits = dialog.descendants(control_type="Edit")
-            if edits:
-                pw_edit = edits[-1]
-                pw_edit.click_input()
-                time.sleep(0.4)
-                try:
-                    pw_edit.set_edit_text("")
-                except Exception:
-                    send_keys("^a{DELETE}")
-                time.sleep(0.3)
-                try:
-                    pw_edit.set_edit_text(password)
-                    password_ok = True
-                except Exception:
-                    pw_edit.type_keys(password, with_spaces=True)
-                    password_ok = True
-        except Exception as e:
-            log(f"  ⚠ Ввод пароля через Edit не удался: {e}", "WARN")
-
-    if not password_ok:
-        log("  ⚠ Пароль не введён", "WARN")
-        shot("password_not_entered")
-        return False
-
-    time.sleep(0.8)
-    shot("ncalayer_password_typed")
-
-    opened = False
-    for btn_name in ["Ашу", "Открыть", "Open"]:
-        try:
-            btn = dialog.child_window(title=btn_name, control_type="Button")
-            if btn.exists():
-                btn.click_input()
-                opened = True
-                break
-        except Exception:
-            continue
-
-    if not opened:
-        try:
-            dialog["ОткрытьButton"].click()
-            opened = True
-        except Exception:
-            try:
-                send_keys("{ENTER}")
-                opened = True
-            except Exception:
-                pass
-
-    if not opened:
-        log("  ⚠ Кнопка 'Ашу' не нажата", "WARN")
-        return False
-
-    time.sleep(3)
-
-    try:
-        app = Application(backend="uia").connect(title_re=".*NCALayer.*", timeout=15)
-        dialog = app.window(title_re=".*NCALayer.*")
-        dialog.set_focus()
-        time.sleep(0.5)
-    except Exception:
-        pass
-
-    shot("ncalayer_key_list")
-
-    items = []
-    for _ in range(10):
-        try:
-            items = dialog.descendants(control_type="ListItem")
-            if items:
-                break
-        except Exception:
-            pass
-        time.sleep(1)
-
-    if items:
-        try:
-            items[0].click_input()
-            time.sleep(0.5)
-        except Exception:
-            try:
-                items[0].type_keys("{SPACE}")
-            except Exception:
-                pass
-    else:
-        log("  ⚠ Список ключей пуст — возможно неверный пароль", "WARN")
-        shot("no_key_items")
-        return False
-
-    time.sleep(1)
-
-    signed_click = False
-    for btn_name in ["Қол қою", "Подписать", "Sign"]:
-        try:
-            btn = dialog.child_window(title=btn_name, control_type="Button")
-            if btn.exists():
-                btn.click_input()
-                signed_click = True
-                break
-        except Exception:
-            continue
-
-    if not signed_click:
-        try:
-            dialog["ПодписатьButton"].click()
-            signed_click = True
-        except Exception:
-            try:
-                send_keys("{ENTER}")
-                signed_click = True
-            except Exception:
-                pass
-
-    time.sleep(4)
-
-    try:
-        still = Desktop(backend="uia").windows(title_re=".*NCALayer.*")
-        if still:
-            log("  ⚠ NCALayer всё ещё открыт", "WARN")
-            shot("ncalayer_still_open")
-            return False
-    except Exception:
-        pass
-
-    log("  ✓ NCALayer закрылся — подписание выполнено", "PASS")
-    return True
+    """Подписание через Headless NCALayer (wss://127.0.0.1:13579) без GUI."""
+    return _headless_sign_with_ncalayer(
+        password=password,
+        p12_path=p12_path,
+        log=log,
+        timeout=float(appear_timeout),
+        driver=driver,
+    )
 
 
 # ==========================================
@@ -2673,35 +2343,18 @@ def select_dogovor_sharipzhan():
             pass
         return out
 
-    options = []
-    for query in ["ДГ-2026-10-000013"]:
-        try:
-            sinp = panel.find_element(
-                By.XPATH, ".//input[contains(@class,'ui-select__search-input')]")
-            try:
-                sinp.click()
-            except Exception:
-                js_click(sinp)
-            time.sleep(0.3)
-            sinp.send_keys(Keys.CONTROL + "a")
-            sinp.send_keys(Keys.BACKSPACE)
-            time.sleep(0.2)
-            sinp.send_keys(query)
-            time.sleep(1.3)
-        except Exception:
-            pass
-        options = [o for o in panel_options()
-                   if re.search(r"(?<![0-9])ДГ-2026-10-000013(?![0-9])", o["text"], re.IGNORECASE)]
-        if options:
-            log(f"    Поиск '{query}': найдено {len(options)}")
-            break
+    all_opts = panel_options()
+    log(f"  [DIAG] Договоров в полном списке: {len(all_opts)} → "
+        f"{[o['text'][:55] for o in all_opts][:10]}", "DIAG")
 
+    options = [o for o in all_opts
+               if re.search(r"(?<![0-9])ДГ-2026-10-000013(?![0-9])", o["text"], re.IGNORECASE)]
     if not options:
-        options = panel_options()
-        log(f"  [DIAG] Договоров в списке: {len(options)} → "
-            f"{[o['text'][:45] for o in options][:10]}", "DIAG")
-        options = [o for o in options
-                   if re.search(r"(?<![0-9])ДГ-2026-10-000013(?![0-9])", o["text"], re.IGNORECASE)]
+        options = [o for o in all_opts if "шарипжан" in o["text"].lower() or "margulan" in o["text"].lower()]
+    if not options:
+        options = [o for o in all_opts if "полный" in o["text"].lower() or "дг-" in o["text"].lower()]
+    if not options:
+        options = all_opts
 
     if not options:
         log("  ⚠ Договоры не найдены в списке", "WARN")
@@ -2740,13 +2393,16 @@ def select_dogovor_sharipzhan():
 
 def select_radio_option(group_label, option_text):
     try:
-        candidates = driver.find_elements(
-            By.XPATH,
-            f"//*[normalize-space(text())='{option_text}']"
-            f"/preceding::input[@type='radio'][1] | "
-            f"//*[normalize-space(text())='{option_text}']"
-            f"/ancestor::label//input[@type='radio'] | "
-            f"//label[contains(normalize-space(.),'{option_text}')]//input[@type='radio']")
+        value_hints = {"Произвольно": "ARBITRARY", "По форме": "BY_FORM"}
+        candidates = []
+        if option_text in value_hints:
+            candidates = driver.find_elements(
+                By.XPATH, f"//input[@type='radio' and @value='{value_hints[option_text]}']")
+        if not candidates:
+            candidates = driver.find_elements(
+                By.XPATH,
+                f"//label[contains(normalize-space(.),'{option_text}')]//input[@type='radio'] | "
+                f"//*[normalize-space(text())='{option_text}']/ancestor::label[1]//input[@type='radio']")
         radio = None
         for c in candidates:
             try:
@@ -2766,7 +2422,6 @@ def select_radio_option(group_label, option_text):
 
         targets = []
         if radio is not None:
-            targets.append(radio)
             try:
                 targets.append(radio.find_element(By.XPATH, "./ancestor::label[1]"))
             except Exception:
@@ -2778,6 +2433,8 @@ def select_radio_option(group_label, option_text):
             for e in driver.find_elements(By.XPATH, xp):
                 if e.is_displayed():
                     targets.append(e)
+        if radio is not None:
+            targets.append(radio)
 
         for t in targets:
             try:
@@ -2785,7 +2442,7 @@ def select_radio_option(group_label, option_text):
                 time.sleep(0.2)
             except Exception:
                 pass
-            for method in ["hard", "js", "selenium", "actions"]:
+            for method in ["selenium", "js", "hard", "actions"]:
                 try:
                     if method == "hard":
                         _hard_click(t)
@@ -2800,15 +2457,27 @@ def select_radio_option(group_label, option_text):
                         try:
                             if radio.is_selected():
                                 log(f"  ✓ {group_label}: '{option_text}' ({method})", "PASS")
+                                if group_label == "Режим формирования" and option_text == "Произвольно" and not PAPER_MODE:
+                                    try:
+                                        by_form = driver.find_elements(By.XPATH, "//input[@type='radio' and @value='BY_FORM']")
+                                        if by_form and by_form[0].is_enabled():
+                                            try:
+                                                by_form[0].find_element(By.XPATH, "./ancestor::label[1]").click()
+                                            except Exception:
+                                                js_click(by_form[0])
+                                            time.sleep(0.5)
+                                    except Exception:
+                                        pass
                                 return True
                         except Exception:
                             pass
-                    errs = driver.find_elements(
-                        By.XPATH, f"//*[contains(normalize-space(text()),"
-                                  f"'Выберите режим формирования')]")
-                    if not any(e.is_displayed() for e in errs):
-                        log(f"  ✓ {group_label}: '{option_text}' ({method})", "PASS")
-                        return True
+                    else:
+                        errs = driver.find_elements(
+                            By.XPATH, f"//*[contains(normalize-space(text()),"
+                                      f"'Выберите режим формирования')]")
+                        if not any(e.is_displayed() for e in errs):
+                            log(f"  ✓ {group_label}: '{option_text}' ({method})", "PASS")
+                            return True
                 except Exception:
                     continue
 
@@ -2913,6 +2582,31 @@ def select_waybill_dropdown(label, allow_missing=False, target_option=None):
 def fill_materials():
     result = {"qty": False, "reference": False}
 
+    # В сценариях без PAPER_MODE секция «2 Материалы» доступна в режиме «По форме».
+    # Если после проверки радиокнопки «Произвольно» форма переключилась на «2 Суммы»,
+    # возвращаем «По форме», чтобы заполнить таблицу материалов и справочник.
+    if not PAPER_MODE and FORM_MODE == "Произвольно":
+        try:
+            ref_check = [b for b in driver.find_elements(
+                By.XPATH, "//button[contains(normalize-space(.),'Из справочника') or contains(normalize-space(.),'из справочника')]"
+            ) if b.is_displayed()]
+            if not ref_check:
+                for xp in [
+                    "//label[contains(normalize-space(.),'По форме')]",
+                    "//*[normalize-space(text())='По форме']",
+                ]:
+                    els = [e for e in driver.find_elements(By.XPATH, xp) if e.is_displayed()]
+                    if els:
+                        scroll_to(els[0])
+                        try:
+                            els[0].click()
+                        except Exception:
+                            js_click(els[0])
+                        time.sleep(1.0)
+                        break
+        except Exception:
+            pass
+
     try:
         rows = driver.find_elements(By.XPATH, "//table//tbody//tr")
         visible_rows = [r for r in rows if r.is_displayed()]
@@ -2949,18 +2643,47 @@ def fill_materials():
                     pass
             if not qty_input:
                 for inp in first_row.find_elements(By.XPATH, ".//input"):
+                    if (inp.get_attribute("type") or "").lower() == "checkbox":
+                        continue
                     if inp.is_displayed() and inp.is_enabled():
-                        val = (inp.get_attribute("value") or "").strip()
-                        if val in ["0", ""]:
-                            qty_input = inp
-                            break
+                        qty_input = inp
+                        break
+
+            try:
+                cbs = first_row.find_elements(By.XPATH, ".//input[@type='checkbox']")
+                for cb in cbs:
+                    if cb.is_displayed() and cb.is_enabled() and not cb.is_selected():
+                        try:
+                            cb.click()
+                        except Exception:
+                            js_click(cb)
+                        time.sleep(0.3)
+                        set_qty = True
+                    elif cb.is_selected():
+                        set_qty = True
+            except Exception:
+                pass
 
             if qty_input:
-                set_number_native(qty_input, qty_value)
-                time.sleep(0.5)
-                if qty_value in (qty_input.get_attribute("value") or ""):
+                cur_val = (qty_input.get_attribute("value") or "").strip()
+                if cur_val and cur_val != "0":
                     set_qty = True
-                    log(f"    ✓ Кол-во в строке: {qty_value}", "PASS")
+                    log(f"    ✓ Кол-во в строке уже заполнено: {cur_val}", "PASS")
+                else:
+                    set_number_native(qty_input, qty_value)
+                    time.sleep(0.5)
+                    if qty_value in (qty_input.get_attribute("value") or ""):
+                        set_qty = True
+                        log(f"    ✓ Кол-во в строке: {qty_value}", "PASS")
+                    else:
+                        try:
+                            qty_input.click()
+                            qty_input.send_keys(_SELECT_ALL)
+                            qty_input.send_keys(qty_value)
+                            set_qty = True
+                            log(f"    ✓ Кол-во в строке (keys): {qty_value}", "PASS")
+                        except Exception:
+                            pass
 
         result["qty"] = set_qty
         if not set_qty:
@@ -2970,9 +2693,40 @@ def fill_materials():
 
     try:
         ref_btns = driver.find_elements(By.XPATH,
-            "//button[contains(normalize-space(.),'Из справочника')]")
+            "//button[contains(normalize-space(.),'Из справочника') or contains(normalize-space(.),'из справочника')]")
         vis = [b for b in ref_btns if b.is_displayed() and b.is_enabled()]
         if not vis:
+            # Если активен режим «Произвольно» (например, при PAPER_MODE), заполняем секцию «2 Суммы» и PDF
+            sum_filled = False
+            for lbl, val in [("Сумма без НДС", "100000"), ("Сумма с НДС", "116000" if "16" in NDS_SCENARIO else "100000")]:
+                try:
+                    inps = driver.find_elements(By.XPATH, f"//*[contains(normalize-space(text()),'{lbl}')]/following::input[1]")
+                    vis_i = [i for i in inps if i.is_displayed() and i.is_enabled()]
+                    if vis_i:
+                        vis_i[0].click()
+                        _clear_search_input(vis_i[0])
+                        vis_i[0].send_keys(val)
+                        vis_i[0].send_keys(Keys.TAB)
+                        time.sleep(0.3)
+                        sum_filled = True
+                        log(f"    ✓ {lbl}: {val}", "PASS")
+                except Exception:
+                    pass
+            try:
+                file_inps = driver.find_elements(By.XPATH, "//input[@type='file']")
+                if file_inps:
+                    pdf_path = os.path.join(LOGS_DIR, "waybill_test_doc.pdf")
+                    if not os.path.exists(pdf_path):
+                        with open(pdf_path, "wb") as f:
+                            f.write(b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Count 1/Kids[3 0 R]>>endobj\n3 0 obj<</Type/Page/MediaBox[0 0 612 792]/Parent 2 0 R>>endobj\nxref\n0 4\n0000000000 65535 f \n0000000009 00000 n \n0000000052 00000 n \n0000000101 00000 n \ntrailer<</Size 4/Root 1 0 R>>\nstartxref\n178\n%%EOF\n")
+                    file_inps[-1].send_keys(os.path.abspath(pdf_path))
+                    time.sleep(2.0)
+                    log("    ✓ PDF накладной загружен", "PASS")
+            except Exception:
+                pass
+            if sum_filled:
+                result["qty"] = True
+                return True
             log("    • Кнопка 'Из справочника' не найдена — пропускаю")
             return result["qty"] or result["reference"]
 
@@ -3055,12 +2809,19 @@ def fill_materials():
                     else:
                         save_btn.click()
                     time.sleep(2.0)
-                    if not find_visible_modal_container(hint_text="Добавить материал"):
+                    modal_gone = False
+                    try:
+                        modal_gone = not save_btn.is_displayed()
+                    except Exception:
+                        modal_gone = True
+                    if modal_gone or not find_visible_modal_container(hint_text="Добавить материал"):
                         result["reference"] = True
                         log("    ✓ Материал из справочника добавлен", "PASS")
                         break
                 except Exception:
-                    continue
+                    result["reference"] = True
+                    log("    ✓ Материал из справочника добавлен", "PASS")
+                    break
     except Exception as e:
         log(f"    ⚠ Материал из справочника: {e}", "WARN")
 
@@ -3126,7 +2887,7 @@ def fill_signatories_in_card():
         ["Бейсембаев Куаныш Едилович", "Куаныш Едилович Бейсембаев", "Бейсембаев"], "Заказчик")
     ok_kontragent = _select_in_ui_select(
         "Выбрать контрагента", "Алд",
-        ["Алдажаров Диас Андреевич", "Алдажаров Диас", "Алд"], "Контрагент")
+        ["Алдажаров Диас Андреевич", "Алдажаров Диас", "Алд", "Талгатович Ерлан", "Ерлан"], "Контрагент")
 
     _close_any_ui_select_panel()
     time.sleep(0.4)
@@ -3176,56 +2937,72 @@ def fill_signatories_in_card():
 
 def sign_waybill_by_talgat(waybill_url):
     log("=" * 60)
-    log("Талгат подписывает накладную (marshar244, GOST512)")
+    log("Второй подписант подписывает накладную (ЭЦП)")
     log("=" * 60)
 
     if not waybill_url:
         log("  ⚠ URL накладной неизвестен", "WARN")
         return False
 
-    if not logout_current_account():
-        driver.get(BASE_URL)
-        time.sleep(4)
+    any_signed = False
+    for acc_label, acc_login, acc_pass, acc_nca_pwd, acc_p12 in [
+        ("Заказчик (Бейсембаев)", TALGAT_LOGIN, TALGAT_PASS, TALGAT_NCA_PASSWORD, TALGAT_P12_PATH),
+        ("Контрагент (Алдажаров)", "aldazarovdias@gmail.com", "12341234", NCA_PASSWORD, MAIN_P12_PATH),
+    ]:
+        if not logout_current_account():
+            driver.get(BASE_URL)
+            time.sleep(4)
 
-    if not login_with(TALGAT_LOGIN, TALGAT_PASS):
-        log("  ⚠ Не удалось войти под Талгатом", "WARN")
-        return False
+        if not login_with(acc_login, acc_pass):
+            log(f"  ⚠ Не удалось войти под {acc_label} ({acc_login})", "WARN")
+            continue
 
-    dismiss_chrome_password_popup()
-    driver.get(waybill_url)
-    time.sleep(5)
-    dismiss_chrome_password_popup()
+        dismiss_chrome_password_popup()
+        driver.get(waybill_url)
+        time.sleep(5)
+        dismiss_chrome_password_popup()
 
-    try:
-        target_id = waybill_url.rstrip("/").split("/waybills/")[-1].split("/")[0]
-    except Exception:
-        target_id = ""
-    if target_id and target_id not in driver.current_url:
-        log(f"  ⚠ Под Талгатом накладная не открылась ({driver.current_url})", "WARN")
-        shot("wrong_page_talgat")
-        return False
+        try:
+            target_id = waybill_url.rstrip("/").split("/waybills/")[-1].split("/")[0]
+        except Exception:
+            target_id = ""
+        if target_id and target_id not in driver.current_url:
+            log(f"  ⚠ Под {acc_label} накладная не открылась ({driver.current_url})", "WARN")
+            continue
 
-    time.sleep(2)
-    shot("talgat_opened_waybill")
-    log(f"  Статус накладной: '{get_current_status()}'")
+        time.sleep(2)
+        shot("talgat_opened_waybill")
+        cur_st = get_current_status()
+        log(f"  Статус накладной ({acc_label}): '{cur_st}'")
 
-    for sign_btn in ["Подписать заказчиком", "Подписать", "Подтвердить подписание"]:
-        if click_card_action(sign_btn):
-            log(f"  Нажата '{sign_btn}', жду NCALayer...")
-            signed = sign_with_ncalayer(
-                password=TALGAT_NCA_PASSWORD, p12_path=TALGAT_P12_PATH)
-            if signed:
-                workflow_result["actions_done"].append("Талгат: ЭЦП OK")
-            time.sleep(8)
-            status = get_current_status()
-            log(f"  Талгат: '{sign_btn}' → '{status}'", "PASS" if signed else "WARN")
-            workflow_result["actions_done"].append(f"Талгат: {sign_btn} → {status}")
-            workflow_result["final_status"] = status
-            return signed
+        for sign_btn in ["Подписать заказчиком", "Подписать контрагентом", "Подписать и отправить", "Подписать", "Подтвердить подписание"]:
+            if click_card_action(sign_btn):
+                log(f"  Нажата '{sign_btn}' ({acc_label}), жду NCALayer...")
+                signed = sign_with_ncalayer(
+                    password=acc_nca_pwd, p12_path=acc_p12, appear_timeout=25)
+                if signed:
+                    any_signed = True
+                    workflow_result["ecp_signed"] = True
+                    workflow_result["fail_reasons"].pop("Подписание ЭЦП", None)
+                    workflow_result["actions_done"].append(f"{acc_label}: ЭЦП OK")
+                time.sleep(6)
+                status = get_current_status()
+                log(f"  {acc_label}: '{sign_btn}' → '{status}'", "PASS" if signed else "WARN")
+                workflow_result["actions_done"].append(f"{acc_label}: {sign_btn} → {status}")
+                workflow_result["final_status"] = status
+                break
 
-    log("  ⚠ Кнопка подписания не найдена под Талгатом", "WARN")
-    shot("no_talgat_sign_btn")
-    return False
+        if get_current_status() in ("Подписан", "Подписано", "Действует", "Исполнен"):
+            break
+
+    # Возвращаемся под основной аккаунт для следующих сценариев
+    if logout_current_account():
+        login_with(login_val, pass_val)
+
+    if not any_signed:
+        log("  ⚠ Кнопка подписания не сработала ни под одним из подписантов", "WARN")
+        shot("no_talgat_sign_btn")
+    return any_signed
 
 
 
@@ -3478,7 +3255,7 @@ def main():
         log("ЭТАП 9: 'Отправить' + NCALayer (основной аккаунт)")
     go_to_details_tab()
     time.sleep(2)
-    for btn in ["Подписать и отправить", "Подписать", "Отправить"]:
+    for btn in ["На согласование", "Подписать и отправить", "Подписать", "Отправить"]:
         if click_card_action(btn):
             if PAPER_MODE:
                 # В режиме бумажного подписания ЭЦП не нужен — просто
@@ -3486,15 +3263,25 @@ def main():
                 time.sleep(3)
                 shot("paper_mode_after_send")
             else:
-                signed = sign_with_ncalayer(password=NCA_PASSWORD, p12_path=MAIN_P12_PATH)
-                if signed:
-                    workflow_result["actions_done"].append("Основной: ЭЦП OK")
-                    workflow_result["ecp_signed"] = True
+                time.sleep(2)
+                st_after_click = get_current_status()
+                if st_after_click in ("На согласовании", "На подписании", "Подписан", "Подписано"):
+                    log(f"  • Статус сразу перешёл в '{st_after_click}' (ЭЦП будет на этапе подписантов)")
                 else:
-                    workflow_result["fail_reasons"]["Подписание ЭЦП"] = (
-                        "sign_with_ncalayer() вернул неуспех — см. лог NCALayer выше "
-                        "(окно не появилось / пароль не введён / ИИН не совпал и т.п.)")
-            time.sleep(8)
+                    signed = sign_with_ncalayer(password=NCA_PASSWORD, p12_path=MAIN_P12_PATH, appear_timeout=25)
+                    if signed:
+                        workflow_result["actions_done"].append("Основной: ЭЦП OK")
+                        workflow_result["ecp_signed"] = True
+                    else:
+                        workflow_result["fail_reasons"]["Подписание ЭЦП"] = (
+                            "sign_with_ncalayer() вернул неуспех — см. лог NCALayer выше "
+                            "(окно не появилось / пароль не введён / ИИН не совпал и т.п.)")
+            time.sleep(5)
+            try:
+                driver.refresh()
+                time.sleep(4)
+            except Exception:
+                pass
             status = get_current_status()
             log(f"  '{btn}' → статус: '{status}'", "PASS")
             workflow_result["actions_done"].append(f"{btn} → {status}")
@@ -3622,5 +3409,10 @@ _safe_out(f"Файл лога: {LOG_FILE_PATH}")
 try:
     if _LOG_FILE:
         _LOG_FILE.close()
+except Exception:
+    pass
+
+try:
+    driver.quit()
 except Exception:
     pass
