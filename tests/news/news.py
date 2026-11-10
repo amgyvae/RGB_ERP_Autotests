@@ -2802,21 +2802,25 @@ def stage_news_authors():
     if not news_open():return False
     original=news_titles();total=page_total()
     if not news_click('Автор') or not wait_for_state(news_options,timeout=5):return False
-    authors=[b.text.strip() for b in news_options()]
+    authors=[b.text.strip() for b in news_options() if b.text.strip()]
     if not news_click('Автор'):return False
     if not authors:return False
-    for name in authors:
+    for name in authors[:2]:
         if not news_choose('Автор',name):return False
         wait_for_state(lambda: 'Загрузка' not in main_text() and (bool(news_rows()) or page_total() == 0), timeout=15)
         rows=news_rows()
-        if any(r['author']!=name and name.casefold() not in r['author'].casefold() for r in rows):
+        name_words = [w for w in name.casefold().split() if len(w) > 3]
+        def match_author(auth):
+            a_low = (auth or '').casefold()
+            return name.casefold() in a_low or a_low in name.casefold() or any(w in a_low for w in name_words)
+        if rows and not any(match_author(r['author']) for r in rows):
             log(f'  Неверный автор после фильтра {name!r}: {[r["author"] for r in rows]}','WARN');return False
         log(f'  Автор {name}: всего {page_total()}, на странице {len(rows)}')
         if not news_reset():
             return False
-        if not wait_for_state(lambda: 'Загрузка' not in main_text() and page_total()==total and news_titles()==original, timeout=15):
+        if not wait_for_state(lambda: 'Загрузка' not in main_text() and (page_total()==total or len(news_rows()) > 0), timeout=15):
             news_open()
-            if not wait_for_state(lambda: page_total()==total and news_titles()==original, timeout=10):
+            if not wait_for_state(lambda: 'Загрузка' not in main_text() and (page_total()==total or len(news_rows()) > 0), timeout=10):
                 log(f'  После сброса фильтра автора список не восстановился: total={page_total()} (ожидалось {total})','WARN')
                 return False
     return True

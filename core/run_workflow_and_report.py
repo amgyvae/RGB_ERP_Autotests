@@ -343,10 +343,15 @@ def parse_gpr_results(output: str, task_map: dict):
     return list(statuses.items()), reasons
 
 
+_LAST_CONSOLE_LOG = None
+
+
 def run_and_collect(script_path: str, task_map: dict, result_format="standard", script_args=()):
+    global _LAST_CONSOLE_LOG
     print(f"Запускаю {script_path} ...")
     script = Path(script_path).resolve()
     console_log = LOGS_DIR / f"{script.stem}_console_{datetime.now():%Y%m%d_%H%M%S}_{uuid.uuid4().hex[:8]}.txt"
+    _LAST_CONSOLE_LOG = console_log
     pp_dirs = [str(ROOT_DIR), str(ROOT_DIR / "core"), str(ROOT_DIR / "config"), str(script.parent)]
     if os.environ.get("PYTHONPATH"):
         pp_dirs.append(os.environ["PYTHONPATH"])
@@ -957,15 +962,30 @@ def main():
 
     if not findings:
         mod_lbl = MODULE_LABELS.get(script_name, script_name)
+        err_msg = "Скрипт завершился без строк итогового отчёта"
+        err_detail = ""
+        try:
+            if _LAST_CONSOLE_LOG and _LAST_CONSOLE_LOG.exists():
+                lines = [l.strip() for l in _LAST_CONSOLE_LOG.read_text(encoding="utf-8", errors="replace").splitlines() if l.strip()]
+                crit = [l for l in lines if any(k in l.lower() for k in ("traceback", "exception", "error", "fail", "краш", "упал", "не найден", "syntaxerror", "importerror"))]
+                if crit:
+                    err_detail = crit[-1][:120]
+        except Exception:
+            pass
+        if err_detail:
+            err_msg += f": {err_detail}"
         save_suite_module_summary(
             script_name, mod_lbl, 0, len(config.get("tasks", [])),
             len(config.get("tasks", [])), [],
-            error="Скрипт завершился без строк итогового отчёта", duration_sec=legacy_dur
+            error=err_msg, duration_sec=legacy_dur
         )
         print("Не нашёл ни одной строки с итогами в выводе — сверь MODULE_CONFIG и формат отчёта.")
-        tg_send(f"❌ <b>Автотест: {mod_lbl}</b>\n"
-                f"Не нашёл ни одной строки с итогами в выводе скрипта — "
-                f"возможно, упал раньше, чем успел что-то залогировать.")
+        tg_text = (f"❌ <b>Автотест: {mod_lbl}</b>\n"
+                   f"Не нашёл ни одной строки с итогами в выводе скрипта — "
+                   f"возможно, упал раньше, чем успел что-то залогировать.")
+        if err_detail:
+            tg_text += f"\nДиагностика ошибки: <code>{escape(err_detail)}</code>"
+        tg_send(tg_text)
         return
 
     # Пакетная запись всех находок ОДНИМ прогоном — раньше здесь был

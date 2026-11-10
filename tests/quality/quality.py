@@ -3717,6 +3717,24 @@ def quality_register_created(config,initial_codes):
         if wait_for_state(lambda:marker in innertext(),timeout=5):return driver.current_url
     driver.get(config['url'])
     if not quality_list_ready(config['url']):return None
+    try:
+        search_inputs = [e for e in driver.find_elements(By.XPATH, "//input[contains(@placeholder,'Поиск') or contains(@class,'search')]") if e.is_displayed()]
+        if search_inputs:
+            sinp = search_inputs[0]
+            sinp.send_keys(Keys.CONTROL, "a")
+            sinp.send_keys(marker)
+            sinp.send_keys(Keys.ENTER)
+            time.sleep(2)
+            cands = list_codes()
+            for code in cands:
+                if open_code('#'+str(code)):
+                    if wait_for_state(lambda:marker in innertext(),timeout=3):
+                        log(f'  ✓ Запись #{code} найдена через поиск по метке {marker}','PASS')
+                        return driver.current_url
+            driver.get(config['url'])
+            quality_list_ready(config['url'])
+    except Exception:
+        pass
     codes=list_codes()
     page=pager_text()
     backwards=bool(codes and codes==sorted(codes))
@@ -3728,6 +3746,8 @@ def quality_register_created(config,initial_codes):
         if key in visited:break
         visited.add(key)
         candidates=sorted(set(list_codes())-set(initial_codes),reverse=True)
+        if not candidates:
+            candidates=list_codes()[:5]
         log(f'  Поиск своей записи: страница {key[0]}/{key[1]}, кандидаты {candidates}')
         for code in candidates:
             if open_code('#'+str(code)):

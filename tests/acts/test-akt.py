@@ -114,6 +114,8 @@ _chrome_options.add_experimental_option("prefs", {
 if is_headless():
     _chrome_options.add_argument("--headless=new")
     _chrome_options.add_argument("--window-size=1920,1080")
+    _chrome_options.add_argument("--no-sandbox")
+    _chrome_options.add_argument("--disable-dev-shm-usage")
 
 driver = webdriver.Chrome(
     service=Service(ChromeDriverManager().install()),
@@ -4493,6 +4495,10 @@ def main():
 #     py test-akt.py ks2 paper_mode   → только эта одна комбинация
 # ==========================================
 def select_run_cases(act_type='', scenario=''):
+    if not act_type and not scenario:
+        return [('avr', 'default')]
+    if act_type == 'all':
+        act_type = ''
     if act_type and act_type not in CORE_SCENARIOS:
         raise ValueError('Неизвестный тип акта: ' + act_type)
     types = [act_type] if act_type else list(CORE_SCENARIOS)

@@ -48,10 +48,10 @@ MODULES = {
     "manager":     ("Панель руководителя",     [RUNNER, os.path.join("tests", "manager", "panelrukovoditelya.py")],             False),
     "tasks":       ("Задачи и поручения",      [os.path.join("tests", "tasks", "zadashi.py")],                                  False),
     "gpr":         ("ГПР",                     [RUNNER, os.path.join("tests", "gpr", "gpr_test.py")],                           True),
-    "contracts":   ("Договоры",                [RUNNER, os.path.join("tests", "contracts", "contract_workflow_new_design.py")], True),
-    "waybills":    ("Накладные",               [RUNNER, os.path.join("tests", "waybills", "waybill_workflow_new_design.py")],   True),
-    "invoices":    ("Счета на оплату",         [RUNNER, os.path.join("tests", "invoices", "invoice_workflow_ecp.py")],          True),
-    "acts":        ("Акты (АВР, КС-2, Ф-2В)",  [RUNNER, os.path.join("tests", "acts", "test-akt.py")],                          True),
+    "contracts":   ("Договоры",                [RUNNER, os.path.join("tests", "contracts", "contract_workflow_new_design.py"), "default"], True),
+    "waybills":    ("Накладные",               [RUNNER, os.path.join("tests", "waybills", "waybill_workflow_new_design.py"), "default"],   True),
+    "invoices":    ("Счета на оплату",         [RUNNER, os.path.join("tests", "invoices", "invoice_workflow_ecp.py"), "default"],          True),
+    "acts":        ("Акты (АВР, КС-2, Ф-2В)",  [RUNNER, os.path.join("tests", "acts", "test-akt.py"), "avr", "default"],                          True),
 }
 
 

@@ -3374,7 +3374,7 @@ def main():
 #     py waybill_workflow_new_design.py             → все 5 сценариев
 #     py waybill_workflow_new_design.py paper_mode   → только один
 # ==========================================
-_scenarios_to_run = [sys.argv[1]] if len(sys.argv) > 1 else list(WAYBILL_SCENARIOS.keys())
+_scenarios_to_run = [sys.argv[1]] if len(sys.argv) > 1 and sys.argv[1] != "all" else (list(WAYBILL_SCENARIOS.keys()) if len(sys.argv) > 1 and sys.argv[1] == "all" else ["default"])
 _scenarios_to_run = [s for s in _scenarios_to_run if s in WAYBILL_SCENARIOS] or ["default"]
 
 for _run_idx, _run_key in enumerate(_scenarios_to_run, 1):

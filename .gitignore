@@ -20,6 +20,7 @@ debug_*.png
 scr_fail_*.png
 
 # ===== Резервные копии и временные файлы =====
+RGB_Test_from_collegue/
 .backup_original/
 *.before_*.py
 index.html

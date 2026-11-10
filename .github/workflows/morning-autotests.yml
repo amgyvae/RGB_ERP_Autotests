@@ -222,8 +222,8 @@ jobs:
       RGB_ACCOUNT2_PASSWORD: ${{ secrets.RGB_ACCOUNT2_PASSWORD || 'h7WxqKIR' }}
       RGB_ACCOUNT3_LOGIN: ${{ secrets.RGB_ACCOUNT3_LOGIN || 'aldazarovdias@gmail.com' }}
       RGB_ACCOUNT3_PASSWORD: ${{ secrets.RGB_ACCOUNT3_PASSWORD || '12341234' }}
-      NCA_KEY1_PASSWORD: ${{ secrets.NCA_KEY1_PASSWORD }}
-      NCA_KEY2_PASSWORD: ${{ secrets.NCA_KEY2_PASSWORD }}
+      NCA_KEY1_PASSWORD: ${{ secrets.NCA_KEY1_PASSWORD || 'Aa200616.' }}
+      NCA_KEY2_PASSWORD: ${{ secrets.NCA_KEY2_PASSWORD || 'Aa1979' }}
       TG_TOKEN: ${{ secrets.TG_TOKEN }}
       TG_CHATS: ${{ secrets.TG_CHATS }}
       GOOGLE_SPREADSHEET_ID: ${{ secrets.GOOGLE_SPREADSHEET_ID }}

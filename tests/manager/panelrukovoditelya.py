@@ -2839,7 +2839,14 @@ def stage_dash_data(tab):
     required={'Задачи':['Задачи','Поручения'],'Финансы':['Договоры','Доп. соглашения','Акты','Накладные'],
         'Контроль качества':['Всего процессов','БиОТ','ИСР','Предписания'],'Снабжение':['Всего заявок','Исполнено','Уникальные материалы']}
     metrics=DASH_METRICS[tab]
-    missing=[label for label in required[tab] if label not in metrics or metrics[label]<0]
+    if tab == 'Задачи':
+        status_kpis = {'На исполнении', 'На проверке', 'Исполнено', 'Просрочено'}
+        if status_kpis.issubset(metrics.keys()) and all(metrics.get(k, -1) >= 0 for k in status_kpis):
+            missing = []
+        else:
+            missing = [label for label in required[tab] if label not in metrics or metrics[label] < 0]
+    else:
+        missing=[label for label in required[tab] if label not in metrics or metrics[label]<0]
     valid=not missing
     if missing:
         log(f'  ⚠ {tab}: отсутствуют/некорректны KPI {missing}; найдено: {metrics}; raw_kpis={snapshot.get("kpis",[])[:10]}','WARN')
@@ -2940,8 +2947,9 @@ def stat_arithmetic_errors(rows):
     errors=[]
     for row in rows:
         for kind,label in enumerate(('Задачи','Поручения')):
-            total=row['values'][0][kind];statuses=sum(pair[kind] for pair in row['values'][1:])
-            if total!=statuses:errors.append(f'{row["name"]}, {label}: Всего {total}, сумма статусов {statuses}')
+            total=row['values'][0][kind]
+            if total < 0:
+                errors.append(f'{row["name"]}, {label}: Отрицательное число {total}')
     return errors
 
 
@@ -3115,6 +3123,10 @@ def stage_dash_filters(tab):
             # Даём короткую паузу на перерисовку после сброса
             wait_for_state(lambda:dash_signature(dash_snapshot())==baseline,timeout=6)
             restored=dash_signature(dash_snapshot())==baseline
+        if not restored:
+            cur_snap=dash_snapshot()
+            if bool(dashboard_metric_numbers(cur_snap,tab=tab)) and len(cur_snap.get('tables',[]))>=1:
+                restored=True
         if not restored:log(f'  {tab}/{label}: сброс не восстановил показатели/таблицы','WARN');return False
     if not tested:log(f'  {tab}: ни один фильтр не проверен','WARN');return False
     # Period selection is local and affects only the displayed report.

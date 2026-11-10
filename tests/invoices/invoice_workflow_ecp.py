@@ -3787,8 +3787,8 @@ def main():
 #     py invoice_workflow_ecp.py                     → все 6 сценариев
 #     py invoice_workflow_ecp.py "Постоплата"          → только один
 # ==========================================
-_scenarios_to_run = [sys.argv[1]] if len(sys.argv) > 1 else list(PAYMENT_TYPE_SCENARIOS)
-_scenarios_to_run = [s for s in _scenarios_to_run if s in PAYMENT_TYPE_SCENARIOS] or ["Выдача наличных"]
+_scenarios_to_run = [sys.argv[1]] if len(sys.argv) > 1 and sys.argv[1] != "all" else (list(PAYMENT_TYPE_SCENARIOS) if len(sys.argv) > 1 and sys.argv[1] == "all" else ["Постоплата"])
+_scenarios_to_run = [s for s in _scenarios_to_run if s in PAYMENT_TYPE_SCENARIOS] or ["Постоплата"]
 
 for _run_idx, _run_key in enumerate(_scenarios_to_run, 1):
     _apply_scenario(_run_key)

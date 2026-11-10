@@ -4394,7 +4394,7 @@ def main():
 #     py contract_workflow_new_design.py           → все 14 сценариев
 #     py contract_workflow_new_design.py barter     → только один
 # ==========================================
-_scenarios_to_run = [sys.argv[1]] if len(sys.argv) > 1 else list(CONTRACT_SCENARIOS)
+_scenarios_to_run = [sys.argv[1]] if len(sys.argv) > 1 and sys.argv[1] != "all" else (list(CONTRACT_SCENARIOS) if len(sys.argv) > 1 and sys.argv[1] == "all" else ["default"])
 _scenarios_to_run = [s for s in _scenarios_to_run if s in CONTRACT_SCENARIOS] or ["default"]
 
 for _run_idx, _run_key in enumerate(_scenarios_to_run, 1):

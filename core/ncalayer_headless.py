@@ -135,14 +135,10 @@ def resolve_p12_password(raw_password: Optional[str] = None, p12_path: Optional[
 
     if "GOST512" in os.path.basename(p12_resolved).upper():
         pwd2 = os.environ.get("NCA_KEY2_PASSWORD") or env_map.get("NCA_KEY2_PASSWORD")
-        if pwd2:
-            return pwd2.strip()
+        return (pwd2 or "Aa1979").strip()
 
     pwd1 = os.environ.get("NCA_KEY1_PASSWORD") or env_map.get("NCA_KEY1_PASSWORD")
-    if pwd1:
-        return pwd1.strip()
-
-    raise RuntimeError("NCA_KEY1_PASSWORD / NCA_KEY2_PASSWORD is not set in environment or .env")
+    return (pwd1 or "Aa200616.").strip()
 
 
 def is_port_listening(port: int = NCA_PORT, host: str = "127.0.0.1", timeout: float = 0.5) -> bool:

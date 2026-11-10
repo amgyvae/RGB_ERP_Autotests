@@ -478,10 +478,15 @@ def close_modal_soft(modal):
     return False
 
 def control_by_label(scope, label):
+    lit = json.dumps(label, ensure_ascii=False)
     for xp in [
-        f".//*[normalize-space(text())='{label}']/following::button[contains(@class,'ui-select__trigger')][1]",
-        f".//*[normalize-space(text())='{label}']/following::*[@role='combobox' or @aria-haspopup][1]",
-        f".//*[normalize-space(text())='{label}']/following::button[1]",
+        f".//*[normalize-space(translate(text(),'*',''))={lit}]/following::button[contains(@class,'ui-select__trigger')][1]",
+        f".//*[normalize-space(translate(.,'*',''))={lit}][not(self::button or self::input)]/following::button[contains(@class,'ui-select__trigger')][1]",
+        f".//*[normalize-space(translate(text(),'*',''))={lit}]/following::*[@role='combobox' or @aria-haspopup][1]",
+        f".//*[normalize-space(translate(.,'*',''))={lit}][not(self::button or self::input)]/following::*[@role='combobox' or @aria-haspopup][1]",
+        f".//*[normalize-space(text())={lit}]/following::button[contains(@class,'ui-select__trigger')][1]",
+        f".//*[normalize-space(text())={lit}]/following::*[@role='combobox' or @aria-haspopup][1]",
+        f".//*[normalize-space(text())={lit}]/following::button[1]",
     ]:
         try:
             for e in scope.find_elements(By.XPATH, xp):
@@ -1740,7 +1745,15 @@ def stage_cancel_create():
 # ЭТАП 4: ФОРМА
 # ==========================================
 def choose_pqb(project_kw=None, project_idx=None, q=0, b=0):
+    try:
+        driver.execute_script("window.scrollTo(0,0);")
+        time.sleep(0.5)
+    except Exception:
+        pass
     ctrl = control_by_label(driver, "Проект")
+    if not ctrl:
+        expand_section("О проекте")
+        ctrl = control_by_label(driver, "Проект")
     panel = open_ui(ctrl)
     if not panel:
         log("  ⚠ Список 'Проект' не открылся", "WARN")
@@ -2147,14 +2160,14 @@ def stage_view_and_edit():
         try:
             driver.get(PROJECTS_URL)
             time.sleep(3)
-            for c in driver.find_elements(By.XPATH, "//table//tr//a[contains(@href, '/projects/')] | //a[contains(@href, '/projects/') and not(contains(@href, '/create'))]"):
+            for c in driver.find_elements(By.XPATH, "//table//tr//a[contains(@href, '/projects/')] | //a[contains(@href, '/projects/') and not(contains(@href, '/create'))] | //*[contains(@class,'card')]//a[contains(@href,'/projects/')] | //*[contains(normalize-space(.), 'Сроки СМР')]"):
                 if c.is_displayed():
                     click_el(c)
                     time.sleep(3)
                     break
         except Exception:
             pass
-    wait_for_state(lambda: find_buttons(["Редактировать"]) or "о проекте" in page_text(), timeout=12)
+    wait_for_state(lambda: find_buttons(["Редактировать"]) or "о проекте" in page_text() or "/edit" in driver.current_url, timeout=12)
     txt = page_text()
     ok = True
     if STATE["status"]:
@@ -2166,9 +2179,30 @@ def stage_view_and_edit():
     log(f"  Кнопка 'Удалить паспорт' на странице: "
         f"{'есть (не нажимаю)' if find_buttons(['Удалить паспорт', 'Удалить']) else 'не найдена'}")
 
-    if not click_button(["Редактировать"], wait=8):
-        log("  ⚠ Кнопка 'Редактировать' не найдена", "WARN")
-        return False
+    edit_clicked = False
+    for edit_xp in [
+        "//button[contains(normalize-space(.), 'Редактировать')]",
+        "//a[contains(normalize-space(.), 'Редактировать')]",
+        "//button[contains(@title, 'Редактировать') or contains(@aria-label, 'Редактировать')]",
+        "//a[contains(@href, '/edit')]",
+        "//button[contains(@class, 'edit')]",
+    ]:
+        try:
+            for eb in driver.find_elements(By.XPATH, edit_xp):
+                if eb.is_displayed() and eb.is_enabled():
+                    if click_el(eb):
+                        edit_clicked = True
+                        break
+            if edit_clicked:
+                break
+        except Exception:
+            pass
+    if not edit_clicked and not click_button(["Редактировать"], wait=5):
+        if "/edit" in driver.current_url or find_buttons(["Сохранить"]):
+            edit_clicked = True
+        else:
+            log("  ⚠ Кнопка 'Редактировать' не найдена", "WARN")
+            return False
     wait_for_state(lambda: "/edit" in driver.current_url or find_buttons(["Сохранить"]), timeout=10)
     time.sleep(2)
     block_native_file_dialog()
