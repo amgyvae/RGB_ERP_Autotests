@@ -218,7 +218,7 @@ def notify_suite_start(selected_keys, web_only: bool = False):
             f"<i>{excl_titles}</i>",
         ])
 
-    _tg_send_chunked(lines)
+    _tg_send_chunked(lines, detailed_only=False)
 
 
 def notify_suite_summary(selected_keys, web_only: bool = False):

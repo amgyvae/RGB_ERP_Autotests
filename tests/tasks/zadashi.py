@@ -3265,6 +3265,15 @@ def save_report():
             for part in parts:
                 tg_send(part)
 
+        try:
+            from run_workflow_and_report import tg_send_group_module_status
+            p_cnt = results.get("passed", 0)
+            t_cnt = p_cnt + len(failed_items)
+            f_list = [(item.get("name", ""), item.get("reason", "")) for item in failed_items]
+            tg_send_group_module_status("Задачи и поручения", t_cnt, p_cnt, f_list, duration_sec)
+        except Exception as e:
+            print(f"[telegram] Ошибка отправки статуса Задач в группу: {e}")
+
         # Отправляем ровно ОДИН финальный скриншот при ошибках (как у всех модулей)
         if failed_items:
             last_shot = None

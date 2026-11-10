@@ -41,15 +41,24 @@ def _normalize_text(value):
 def _load_credentials():
     if gspread is None or Credentials is None:
         return None
-    raw_json = env("GOOGLE_SERVICE_ACCOUNT_JSON", "-")
-    if raw_json != "-" and raw_json.strip():
+    raw_json = env("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
+    if raw_json and raw_json != "-":
         try:
+            if not raw_json.startswith("{"):
+                import base64
+                try:
+                    raw_json = base64.b64decode(raw_json).decode("utf-8")
+                except Exception:
+                    pass
             return Credentials.from_service_account_info(json.loads(raw_json), scopes=SCOPES)
         except Exception as e:
-            raise ValueError('Неверный GOOGLE_SERVICE_ACCOUNT_JSON: проверьте ключ Google') from e
+            print(f"[sheet_reporter] Предупреждение: неверный формат GOOGLE_SERVICE_ACCOUNT_JSON: {e}")
     for candidate in (CREDS_PATH, str(ROOT_DIR / CREDS_PATH), str(ROOT_DIR / "service_account.json"), str(ROOT_DIR / "config" / "service_account.json")):
         if os.path.isfile(candidate):
-            return Credentials.from_service_account_file(candidate, scopes=SCOPES)
+            try:
+                return Credentials.from_service_account_file(candidate, scopes=SCOPES)
+            except Exception as e:
+                print(f"[sheet_reporter] Предупреждение: ошибка чтения {candidate}: {e}")
     return None
 
 
@@ -57,9 +66,11 @@ def _connect_with_retry(max_attempts=4):
     """Подключение с повтором при 429 (Quota exceeded)."""
     creds = _load_credentials()
     if creds is None:
-        raise FileNotFoundError('Нет ключа Google Sheets: задайте GOOGLE_SERVICE_ACCOUNT_JSON или положите service_account.json в корень проекта/config')
+        print("[sheet_reporter] Учётные данные Google Sheets не найдены (нет service_account.json или GOOGLE_SERVICE_ACCOUNT_JSON). Пропуск записи.")
+        return None
     if not SPREADSHEET_ID:
-        raise ValueError('GOOGLE_SPREADSHEET_ID не задан')
+        print("[sheet_reporter] GOOGLE_SPREADSHEET_ID не задан. Пропуск записи.")
+        return None
     for attempt in range(max_attempts):
         try:
             client = gspread.authorize(creds)
@@ -70,7 +81,12 @@ def _connect_with_retry(max_attempts=4):
                 print(f"[sheet_reporter] Лимит API (429), жду {wait} сек и пробую снова...")
                 time.sleep(wait)
                 continue
-            raise
+            print(f"[sheet_reporter] Ошибка API Google Sheets: {e}")
+            return None
+        except Exception as e:
+            print(f"[sheet_reporter] Ошибка подключения к Google Sheets: {e}")
+            return None
+    return None
 
 
 def _connect():

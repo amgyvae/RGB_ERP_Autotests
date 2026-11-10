@@ -248,6 +248,17 @@ jobs:
       - name: Подготовка папки загрузок
         run: python -c "import os; os.makedirs(os.path.expanduser('~/Downloads'), exist_ok=True)"
 
+      - name: Подготовка ключа Google Sheets
+        run: |
+          python -c "
+          import os
+          key = os.environ.get('GOOGLE_SERVICE_ACCOUNT_JSON', '').strip()
+          if key and key != '-':
+              with open('service_account.json', 'w', encoding='utf-8') as f:
+                  f.write(key)
+              print('service_account.json подготовлен из секрета GOOGLE_SERVICE_ACCOUNT_JSON')
+          "
+
       - name: Запуск — ${{ matrix.title }}
         run: python run_all.py ${{ matrix.module }}
 

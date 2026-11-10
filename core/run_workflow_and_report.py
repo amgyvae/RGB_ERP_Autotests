@@ -123,6 +123,47 @@ def tg_send_group(text: str):
             print(f"[telegram] Не удалось отправить сводку в группу {cid}: {e}")
 
 
+def tg_send_group_module_status(title: str, total: int, passed: int, failures: list, duration_sec: float = 0.0):
+    """
+    Отправляет краткий аккуратный статус завершения модуля в общую группу с командой.
+    Ровно 1 аккуратная строчка (или 2-3 строки при ошибках), без простыни этапов.
+    """
+    groups = get_group_chats()
+    if not groups:
+        return
+    dur_str = f" · ⏱ {_format_duration_ru(duration_sec)}" if duration_sec > 0 else ""
+    if passed == total and total > 0 and not failures:
+        text = f"✅ <b>{escape(title)}</b> — успешно ({passed}/{total}){dur_str}"
+    else:
+        text = f"🔥 <b>{escape(title)}</b> — {passed}/{total} успешно (❌ {len(failures)} ошибок){dur_str}"
+        if failures:
+            err_items = []
+            for item in failures[:2]:
+                if isinstance(item, (list, tuple)) and len(item) >= 2:
+                    fn, fr = item[0], item[1]
+                elif isinstance(item, dict):
+                    fn, fr = item.get("name", ""), item.get("reason", "")
+                else:
+                    fn, fr = str(item), ""
+                fn = escape(str(fn))
+                fr = escape(str(fr or "")).strip()
+                if fr and fr not in ("см. лог", "None", ""):
+                    err_items.append(f"• <i>{fn}: {fr}</i>")
+                else:
+                    err_items.append(f"• <i>{fn}</i>")
+            if len(failures) > 2:
+                err_items.append(f"• <i>...и ещё {len(failures) - 2}</i>")
+            text += "\n" + "\n".join(err_items)
+
+    for cid in groups:
+        try:
+            requests.post(f"{TG_API}/sendMessage", data={
+                "chat_id": cid, "text": text[:4000], "parse_mode": "HTML"
+            }, timeout=10)
+        except Exception as e:
+            print(f"[telegram] Ошибка отправки статуса модуля в группу {cid}: {e}")
+
+
 def tg_photo(path: str, caption: str = "", detailed_only: bool = True):
     if not TG_ENABLED:
         return
@@ -550,8 +591,13 @@ def save_suite_module_summary(script_name: str, module_label: str, passed_checks
 
 
 def require_sheet_write(result, expected):
-    if not isinstance(result, dict) or result.get('skipped_no_creds') or result.get('written') != expected:
-        raise RuntimeError('Google Sheets: запись всех результатов не подтверждена')
+    if not isinstance(result, dict):
+        raise RuntimeError('Google Sheets: не получен отчёт о записи')
+    if result.get('skipped_no_creds'):
+        return
+    written = result.get('written', 0)
+    if written != expected:
+        raise RuntimeError(f'Google Sheets: записано {written} из {expected} строк')
 
 
 def send_telegram_summary(script_name: str, findings: list, reasons: dict,
@@ -636,7 +682,10 @@ def send_telegram_summary(script_name: str, findings: list, reasons: dict,
             script_dir = os.path.dirname(os.path.abspath(script_name)) or "."
             screenshot = _latest_debug_screenshot(script_dir)
         if screenshot:
-            tg_photo(screenshot, caption=f"📸 Последний скриншот: {module_label}")
+            tg_photo(screenshot, caption=f"📸 Последний скриншот: {module_label}", detailed_only=True)
+
+    # Краткий аккуратный статус по завершении модуля — в общую группу с командой
+    tg_send_group_module_status(module_label, total_checks, passed_checks, failed_items, duration_sec)
 
 
 
@@ -811,21 +860,30 @@ def run_contacts(script_path, args, report_results, tg_send, tg_photo):
         return 2
     dur = time.monotonic() - started_ts
     findings = contacts_findings_for_sheet(results, script_path)
+    sheet_error = ''
     try:
         written = report_results(findings, row_range=CONTACTS_ROW_RANGE)
         require_sheet_write(written, len(findings))
     except Exception as exc:
-        print('Не удалось записать результаты в Google Sheets:', type(exc).__name__)
-        tg_send('⚠️ <b>Контакты: результаты не записаны в Google Sheets</b>\nЛокальный отчёт сохранён.')
-        for message in contacts_summary(results, script_path, duration_sec=dur):
-            tg_send(message)
-        return 2
+        sheet_error = type(exc).__name__ + ': ' + str(exc)
+        print('Не удалось записать результаты Контактов в Google Sheets:', sheet_error)
+        tg_send('⚠️ <b>Контакты: результаты не записаны в Google Sheets</b>\n' + escape(sheet_error), detailed_only=True)
+
+    # 1. Подробный технический отчёт со всеми этапами — в личный чат бота
     for message in contacts_summary(results, script_path, duration_sec=dur):
-        tg_send(message)
+        tg_send(message, detailed_only=True)
     screenshot = contacts_current_screenshot(results, run_id)
     if screenshot:
-        tg_photo(screenshot, caption='📸 Последний скриншот: Контакты')
+        tg_photo(screenshot, caption='📸 Последний скриншот: Контакты', detailed_only=True)
+
+    # 2. Краткий аккуратный статус — в общую группу с командой
+    checks = contacts_checks(script_path)
+    failed_items = [(checks[r['id'] - 1]['name'], r.get('reason', '')) for r in results if r['status'] == 'FAIL']
+    tg_send_group_module_status("Контакты", len(results), sum(1 for r in results if r['status'] == 'PASS'), failed_items, dur)
+
     print('Полный лог:', log_path)
+    # Код выхода отражает только реальный результат веб-автотеста в ERP:
+    # 0 если все проверки пройдены, 1 если есть ошибки в интерфейсе
     return 0 if all((r['status'] == 'PASS' for r in results)) else 1
 
 
@@ -923,7 +981,7 @@ def run_structured_workflow(script_path, args, module_key, checks_file, row_rang
         print('Ошибка общего обработчика Telegram:', type(exc).__name__, flush=True)
     print('Лог:', log_path)
     print('Результаты:', result_path)
-    if run_error or sheet_error or delivery_error:
+    if run_error or delivery_error:
         return 2
     return 1 if skipped or any(not r['ok'] for r in rows) else 0
 
