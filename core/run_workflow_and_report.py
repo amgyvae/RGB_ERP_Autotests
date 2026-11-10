@@ -510,6 +510,11 @@ def save_suite_module_summary(script_name: str, module_label: str, passed_checks
         print(f"[suite_summary] Не удалось сохранить сводку модуля {script_name}: {exc}")
 
 
+def require_sheet_write(result, expected):
+    if not isinstance(result, dict) or result.get('skipped_no_creds') or result.get('written') != expected:
+        raise RuntimeError('Google Sheets: запись всех результатов не подтверждена')
+
+
 def send_telegram_summary(script_name: str, findings: list, reasons: dict,
                           *, skipped=(), error="", sheet_error="", screenshot=None,
                           duration_sec: float = 0.0):
@@ -768,7 +773,8 @@ def run_contacts(script_path, args, report_results, tg_send, tg_photo):
     dur = time.monotonic() - started_ts
     findings = contacts_findings_for_sheet(results, script_path)
     try:
-        report_results(findings, row_range=CONTACTS_ROW_RANGE)
+        written = report_results(findings, row_range=CONTACTS_ROW_RANGE)
+        require_sheet_write(written, len(findings))
     except Exception as exc:
         print('Не удалось записать результаты в Google Sheets:', type(exc).__name__)
         tg_send('⚠️ <b>Контакты: результаты не записаны в Google Sheets</b>\nЛокальный отчёт сохранён.')
@@ -859,10 +865,9 @@ def run_structured_workflow(script_path, args, module_key, checks_file, row_rang
     if findings:
         try:
             written = report_results(findings, row_range=row_range)
-            if not written or written.get('written') != len(findings):
-                sheet_error = 'VerificationError'
+            require_sheet_write(written, len(findings))
         except Exception as exc:
-            sheet_error = type(exc).__name__
+            sheet_error = type(exc).__name__ + ': ' + str(exc)
     screenshot = ""
     if payload.get('screenshot'):
         shot_path = Path(payload['screenshot']).resolve()
@@ -992,9 +997,15 @@ def main():
     # цикл с report_result() на каждую строку, что при нескольких
     # сценариях подряд (много находок за раз) упиралось в лимит
     # Google Sheets API (429 Quota exceeded).
-    report_results(findings, row_range=config["row_range"])
+    sheet_error = ''
+    try:
+        written = report_results(findings, row_range=config["row_range"])
+        require_sheet_write(written, len(findings))
+    except Exception as exc:
+        sheet_error = type(exc).__name__ + ': ' + str(exc)
+        print('[Google Sheets] РЕЗУЛЬТАТЫ НЕ ЗАПИСАНЫ: ' + sheet_error, flush=True)
 
-    send_telegram_summary(script_name, findings, reasons, duration_sec=legacy_dur)
+    send_telegram_summary(script_name, findings, reasons, sheet_error=sheet_error, duration_sec=legacy_dur)
 
 
 if __name__ == "__main__":

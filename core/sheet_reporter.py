@@ -46,8 +46,7 @@ def _load_credentials():
         try:
             return Credentials.from_service_account_info(json.loads(raw_json), scopes=SCOPES)
         except Exception as e:
-            print(f"[sheet_reporter] Ошибка парсинга GOOGLE_SERVICE_ACCOUNT_JSON: {e}")
-            return None
+            raise ValueError('Неверный GOOGLE_SERVICE_ACCOUNT_JSON: проверьте ключ Google') from e
     for candidate in (CREDS_PATH, str(ROOT_DIR / CREDS_PATH), str(ROOT_DIR / "service_account.json"), str(ROOT_DIR / "config" / "service_account.json")):
         if os.path.isfile(candidate):
             return Credentials.from_service_account_file(candidate, scopes=SCOPES)
@@ -58,11 +57,9 @@ def _connect_with_retry(max_attempts=4):
     """Подключение с повтором при 429 (Quota exceeded)."""
     creds = _load_credentials()
     if creds is None:
-        print("[sheet_reporter] Учетные данные Google Sheets не найдены (пропуск записи).")
-        return None
+        raise FileNotFoundError('Нет ключа Google Sheets: задайте GOOGLE_SERVICE_ACCOUNT_JSON или положите service_account.json в корень проекта/config')
     if not SPREADSHEET_ID:
-        print("[sheet_reporter] GOOGLE_SPREADSHEET_ID не задан (пропуск записи).")
-        return None
+        raise ValueError('GOOGLE_SPREADSHEET_ID не задан')
     for attempt in range(max_attempts):
         try:
             client = gspread.authorize(creds)
