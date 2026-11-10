@@ -143,7 +143,7 @@ def _trigger_label() -> str:
     return "Локальный запуск"
 
 
-def _tg_send_chunked(lines):
+def _tg_send_chunked(lines, chats=None, detailed_only: bool = True):
     try:
         from run_workflow_and_report import tg_send
     except Exception as exc:
@@ -152,11 +152,11 @@ def _tg_send_chunked(lines):
     current = ""
     for line in lines:
         if len(current) + len(line) + 1 > 3800:
-            tg_send(current)
+            tg_send(current, chats=chats, detailed_only=detailed_only)
             current = ""
         current += ("\n" if current else "") + line
     if current:
-        tg_send(current)
+        tg_send(current, chats=chats, detailed_only=detailed_only)
 
 
 def notify_suite_start(selected_keys, web_only: bool = False):
@@ -383,7 +383,72 @@ def notify_suite_summary(selected_keys, web_only: bool = False):
         lines.append("<b>Детализация ошибок (Баг сайта / Ошибка кода):</b>")
         lines.extend(detail_lines)
 
-    _tg_send_chunked(lines)
+    # 1. Полный подробный инженерный отчёт — отправляем в чат бота (разработчику)
+    _tg_send_chunked(lines, detailed_only=True)
+
+    # 2. Компактная сводка для тимлида — отправляем в общую группу с участниками
+    try:
+        from run_workflow_and_report import get_group_chats
+        group_chats = get_group_chats()
+    except Exception:
+        group_chats = []
+
+    if group_chats:
+        header_grp = "✅" if (passed_modules == total_modules and total_modules > 0 and not failed_modules) else "📊"
+        grp_status_title = (
+            "ВСЕ ТЕСТЫ ПРОЙДЕНЫ УСПЕШНО"
+            if (passed_modules == total_modules and not failed_modules)
+            else "ЕСТЬ ЗАМЕЧАНИЯ"
+        )
+        ecp_short = "🔐 С ЭЦП" if has_ecp else "🌐 БЕЗ ЭЦП"
+        grp_lines = [
+            f"{header_grp} <b>Сводка для тимлида — {grp_status_title}</b>",
+            f"📅 {finish_date} {finish_hms} (Алматы, UTC+5)",
+            f"🔐 Режим: <b>{ecp_short}</b> · ⏱ Длительность: <b>{_fmt_duration(wall_sec)}</b>",
+            "",
+            f"🏁 <b>Результат:</b> <b>{passed_modules}/{total_modules}</b> успешно"
+            + (f" · ❌ с ошибками: <b>{failed_modules}</b>" if failed_modules else "")
+            + (f" · ⚠️ без отчёта: <b>{missing_modules}</b>" if missing_modules else ""),
+            f"📋 <b>Этапы проверок:</b> ✅ <b>{sum_passed_chk}/{sum_total_chk}</b> успешно"
+            + (f" · ❌ ошибок: <b>{sum_failed_chk}</b>" if sum_failed_chk else ""),
+        ]
+
+        if failed_modules or missing_modules:
+            grp_lines.append("")
+            grp_lines.append("❌ <b>Замечания по модулям:</b>")
+            for key in selected_keys:
+                stem = _module_stem(key)
+                info = summary_by_stem.get(stem)
+                title = MODULES[key][0]
+                if not info:
+                    grp_lines.append(f"• <b>{escape(title)}:</b> <i>отчёт модуля не сформирован</i>")
+                    continue
+                if not info.get("ok"):
+                    failures = info.get("failures") or []
+                    if failures:
+                        clean_reasons = []
+                        for f_item in failures[:2]:
+                            fn = escape(str(f_item.get("name", "")))
+                            fr = escape(str(f_item.get("reason", "")))
+                            if fr and fr not in ("см. лог", "None", ""):
+                                clean_reasons.append(f"{fn} (<i>{fr}</i>)")
+                            else:
+                                clean_reasons.append(fn)
+                        if len(failures) > 2:
+                            clean_reasons.append(f"<i>...и ещё {len(failures) - 2}</i>")
+                        grp_lines.append(f"• <b>{escape(title)}:</b> " + "; ".join(clean_reasons))
+                    elif info.get("skipped_count"):
+                        grp_lines.append(f"• <b>{escape(title)}:</b> <i>пропущено этапов: {info['skipped_count']}</i>")
+
+        sheet_id = os.environ.get("GOOGLE_SPREADSHEET_ID")
+        if sheet_id:
+            grp_lines.append("")
+            grp_lines.append(f'📋 <a href="https://docs.google.com/spreadsheets/d/{sheet_id}">Открыть подробный чек-лист в Google Таблице</a>')
+        else:
+            grp_lines.append("")
+            grp_lines.append("📋 <i>Подробный чек-лист записан в Google Таблицу.</i>")
+
+        _tg_send_chunked(grp_lines, chats=group_chats, detailed_only=False)
 
 
 def resolve(names, web_only=False):

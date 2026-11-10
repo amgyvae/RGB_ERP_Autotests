@@ -54,6 +54,28 @@ TG_CHATS = env_list("TG_CHATS")
 TG_ENABLED = env_flag("TG_ENABLED", default=True) and bool(TG_TOKEN and TG_CHATS)
 TG_API = f"https://api.telegram.org/bot{TG_TOKEN}"
 
+
+def is_group_chat(cid) -> bool:
+    """Групповые чаты и супергруппы в Telegram имеют отрицательный ID (обычно -100...)."""
+    return str(cid).strip().startswith("-")
+
+
+def get_detailed_chats():
+    """Чаты для детальных отчётов по каждому этапу сценария и скриншотов (личный чат разработчика/бота)."""
+    custom = env_list("TG_CHATS_DETAILED")
+    if custom:
+        return custom
+    personal = [c for c in TG_CHATS if not is_group_chat(c)]
+    return personal if personal else TG_CHATS
+
+
+def get_group_chats():
+    """Чаты для компактной сводки тимлиду (группы с участниками)."""
+    custom = env_list("TG_CHATS_GROUP")
+    if custom:
+        return custom
+    return [c for c in TG_CHATS if is_group_chat(c)]
+
 # Человекочитаемые названия модулей для сообщений в Telegram
 MODULE_LABELS = {
     "panelrukovoditelya.py": "Панель руководителя",
@@ -73,10 +95,12 @@ MODULE_LABELS = {
 }
 
 
-def tg_send(text: str):
+def tg_send(text: str, chats=None, detailed_only: bool = True):
     if not TG_ENABLED:
         return
-    for cid in TG_CHATS:
+    if chats is None:
+        chats = get_detailed_chats() if detailed_only else TG_CHATS
+    for cid in chats:
         try:
             requests.post(f"{TG_API}/sendMessage", data={
                 "chat_id": cid, "text": text[:4000], "parse_mode": "HTML"
@@ -85,12 +109,27 @@ def tg_send(text: str):
             print(f"[telegram] Не удалось отправить сообщение в чат {cid}: {e}")
 
 
-def tg_photo(path: str, caption: str = ""):
+def tg_send_group(text: str):
+    """Отправка краткой сводки строго в группы (тимлиду)."""
+    groups = get_group_chats()
+    if not groups:
+        return
+    for cid in groups:
+        try:
+            requests.post(f"{TG_API}/sendMessage", data={
+                "chat_id": cid, "text": text[:4000], "parse_mode": "HTML"
+            }, timeout=10)
+        except Exception as e:
+            print(f"[telegram] Не удалось отправить сводку в группу {cid}: {e}")
+
+
+def tg_photo(path: str, caption: str = "", detailed_only: bool = True):
     if not TG_ENABLED:
         return
     if not os.path.exists(path):
         return
-    for cid in TG_CHATS:
+    chats = get_detailed_chats() if detailed_only else TG_CHATS
+    for cid in chats:
         try:
             with open(path, "rb") as f:
                 requests.post(f"{TG_API}/sendPhoto", data={

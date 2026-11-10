@@ -140,10 +140,21 @@ TG_CHATS = env_list("TG_CHATS")
 TG_ENABLED = env_flag("TG_ENABLED", default=True) and bool(TG_TOKEN and TG_CHATS)
 TG_API = f"https://api.telegram.org/bot{TG_TOKEN}"
 
-def tg_send(text):
+def is_group_chat(cid):
+    return str(cid).strip().startswith("-")
+
+def get_detailed_chats():
+    custom = env_list("TG_CHATS_DETAILED")
+    if custom:
+        return custom
+    personal = [c for c in TG_CHATS if not is_group_chat(c)]
+    return personal if personal else TG_CHATS
+
+def tg_send(text, detailed_only=True):
     if not TG_ENABLED:
         return
-    for cid in TG_CHATS:
+    targets = get_detailed_chats() if detailed_only else TG_CHATS
+    for cid in targets:
         try:
             r = requests.post(f"{TG_API}/sendMessage", data={
                 "chat_id": cid, "text": text[:4000], "parse_mode": "HTML"
@@ -153,11 +164,12 @@ def tg_send(text):
         except Exception as e:
             print(f"[telegram] Исключение при отправке в чат {cid}: {e}")
 
-def tg_photo(path, caption=""):
+def tg_photo(path, caption="", detailed_only=True):
     if not TG_ENABLED:
         return
     if not os.path.exists(path): return
-    for cid in TG_CHATS:
+    targets = get_detailed_chats() if detailed_only else TG_CHATS
+    for cid in targets:
         try:
             with open(path, "rb") as f:
                 requests.post(f"{TG_API}/sendPhoto", data={
