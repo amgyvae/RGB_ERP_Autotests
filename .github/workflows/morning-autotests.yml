@@ -24,10 +24,19 @@ on:
   # Кнопка «Run workflow» во вкладке Actions для ручного запуска.
   workflow_dispatch:
     inputs:
+      preset:
+        description: "Режим запуска"
+        type: choice
+        options:
+          - "ecp (только 5 модулей с ЭЦП: ГПР, договоры, накладные, счета, акты)"
+          - "all (все 16 модулей ERP)"
+          - "web (только 11 модулей БЕЗ ЭЦП)"
+          - "custom (указать конкретные модули в строке ниже)"
+        default: "ecp (только 5 модулей с ЭЦП: ГПР, договоры, накладные, счета, акты)"
       modules:
-        description: "Модули через запятую (all = все): contacts,passport,smeta,finance,supply,quality,discussions,wiki,news,manager,tasks,gpr,contracts,waybills,invoices,acts"
+        description: "Модули через запятую (если выбран custom или нужны отдельные тесты): contracts,invoices,acts"
         required: false
-        default: "all"
+        default: ""
       ncalayer:
         description: "Модули с ЭЦП (NCALayer) на облачном раннере"
         type: choice
@@ -170,7 +179,9 @@ jobs:
         id: matrix
         if: steps.gate.outputs.should_run == 'true'
         env:
-          MODULES: ${{ inputs.modules || vars.AUTOTEST_MODULES || 'all' }}
+          INPUT_PRESET: ${{ inputs.preset }}
+          INPUT_MODULES: ${{ inputs.modules }}
+          VAR_MODULES: ${{ vars.AUTOTEST_MODULES }}
           # Headless NCALayer работает автономно на Java в headless-режиме (wss://127.0.0.1:13579)
           # на любом облачном раннере Ubuntu и на Windows. Пропускаем ЭЦП только если явно выбрано skip.
           WEB_ONLY: ${{ inputs.ncalayer == 'skip' }}
@@ -179,16 +190,31 @@ jobs:
           TG_CHATS: ${{ secrets.TG_CHATS }}
           RGB_ACCOUNT1_LOGIN: jyktmargyplay2@gmail.com
         run: |
+          TARGET_MODULES=""
+          if [[ "$INPUT_PRESET" == ecp* ]]; then
+            TARGET_MODULES="ecp"
+          elif [[ "$INPUT_PRESET" == web* ]]; then
+            TARGET_MODULES="web"
+          elif [ -n "$INPUT_MODULES" ] && [ "$INPUT_MODULES" != "all" ]; then
+            TARGET_MODULES="$INPUT_MODULES"
+          elif [[ "$INPUT_PRESET" == all* ]]; then
+            TARGET_MODULES="all"
+          elif [ -n "$VAR_MODULES" ]; then
+            TARGET_MODULES="$VAR_MODULES"
+          else
+            TARGET_MODULES="all"
+          fi
+
           FLAGS=""
           if [ "$WEB_ONLY" = "true" ]; then FLAGS="--web-only"; fi
-          MATRIX=$(python run_all.py --matrix "$MODULES" $FLAGS)
+          MATRIX=$(python run_all.py --matrix "$TARGET_MODULES" $FLAGS)
           echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
-          echo "modules=$MODULES" >> "$GITHUB_OUTPUT"
+          echo "modules=$TARGET_MODULES" >> "$GITHUB_OUTPUT"
           echo "web_only=$WEB_ONLY" >> "$GITHUB_OUTPUT"
           echo "### План прогона" >> "$GITHUB_STEP_SUMMARY"
-          echo "Модули: \`$MODULES\` · только web: \`$WEB_ONLY\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "Модули: \`$TARGET_MODULES\` · только web: \`$WEB_ONLY\`" >> "$GITHUB_STEP_SUMMARY"
           echo "$MATRIX"
-          python run_all.py --notify-start "$MODULES" $FLAGS
+          python run_all.py --notify-start "$TARGET_MODULES" $FLAGS
 
       - name: Метаданные старта прогона
         if: steps.gate.outputs.should_run == 'true'

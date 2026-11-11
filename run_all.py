@@ -452,12 +452,34 @@ def notify_suite_summary(selected_keys, web_only: bool = False):
 
 
 def resolve(names, web_only=False):
-    if not names or names == ["all"]:
-        names = list(MODULES)
-    unknown = [n for n in names if n not in MODULES]
-    if unknown:
-        raise SystemExit(f"Неизвестные модули: {', '.join(unknown)}. Доступны: {', '.join(MODULES)}")
-    return [n for n in names if not (web_only and MODULES[n][2])]
+    if not names:
+        names = ["all"]
+    expanded = []
+    for item in names:
+        # Разбиваем по запятым и пробелам
+        parts = [p.strip().lower() for p in item.replace(" ", ",").split(",") if p.strip()]
+        for it in parts:
+            if it == "all":
+                expanded.extend(list(MODULES))
+            elif it in ("ecp", "ecp_only", "with_ecp", "с_эцп", "эцп"):
+                expanded.extend([k for k, (_, _, needs_ecp) in MODULES.items() if needs_ecp])
+            elif it in ("web", "web_only", "no_ecp", "without_ecp", "без_эцп"):
+                expanded.extend([k for k, (_, _, needs_ecp) in MODULES.items() if not needs_ecp])
+            elif it in MODULES:
+                expanded.append(it)
+            else:
+                raise SystemExit(
+                    f"Неизвестный модуль или пресет: '{it}'. "
+                    f"Доступны: all, ecp, web, а также: {', '.join(MODULES)}"
+                )
+    # Сохраняем уникальные ключи с сохранением порядка
+    seen = set()
+    result = []
+    for k in expanded:
+        if k not in seen:
+            seen.add(k)
+            result.append(k)
+    return [n for n in result if not (web_only and MODULES[n][2])]
 
 
 def run_module(key, log, web_only: bool = False):
