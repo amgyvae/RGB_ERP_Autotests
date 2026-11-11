@@ -113,16 +113,16 @@ pass_val = env("RGB_ACCOUNT1_PASSWORD", env("RGB_ACCOUNT1_PASSWORD_ALT", "123412
 
 _raw_second_login = env("RGB_ACCOUNT2_LOGIN")
 _raw_second_pass = env("RGB_ACCOUNT2_PASSWORD")
-SECOND_LOGIN = _raw_second_login if (_raw_second_login and _raw_second_login != login_val) else "dias.aldazharov@bk.ru"
-SECOND_PASS = _raw_second_pass if (_raw_second_login and _raw_second_login != login_val and _raw_second_pass) else "h7WxqKIR"
-SECOND_NCA_PASSWORD = env("NCA_KEY2_PASSWORD")
+SECOND_LOGIN = _raw_second_login if (_raw_second_login and _raw_second_login != login_val) else "marshar244@gmail.com"
+SECOND_PASS = _raw_second_pass if (_raw_second_login and _raw_second_login != login_val and _raw_second_pass) else "12341234"
+SECOND_NCA_PASSWORD = env("NCA_KEY2_PASSWORD", "Aa1979")
 SECOND_P12_PATH = resolve_p12_path(env("NCA_KEY2_PATH"), key_index=2)
 
 _raw_third_login = env("RGB_ACCOUNT3_LOGIN")
 _raw_third_pass = env("RGB_ACCOUNT3_PASSWORD")
-THIRD_LOGIN = _raw_third_login if (_raw_third_login and _raw_third_login != login_val) else "aldazarovdias@gmail.com"
+THIRD_LOGIN = _raw_third_login if (_raw_third_login and _raw_third_login != login_val) else "hhuh8918@gmail.com"
 THIRD_PASS = _raw_third_pass if (_raw_third_login and _raw_third_login != login_val and _raw_third_pass) else "12341234"
-THIRD_NCA_PASSWORD = env("NCA_KEY1_PASSWORD")
+THIRD_NCA_PASSWORD = env("NCA_KEY1_PASSWORD", "Aa200616.")
 THIRD_P12_PATH = resolve_p12_path(env("NCA_KEY1_PATH"), key_index=1)
 
 BASE_URL = "https://testportal.rgbgroup.kz/"
@@ -1214,8 +1214,8 @@ def collect_options_generic():
 
 def select_first_form_dropdown(label, allow_missing=False, target_option=None):
     """Выбор в dropdown формы создания договора.
-    Контрагент → ИП Алдажаров
-    Заказчик → AI Group
+    Контрагент → ШАРИПЖАН МАРГУЛАН
+    Заказчик → GI Group
 
     Порядок попыток:
       1. Реальный UI-кит сайта: <button class="ui-select__trigger...">
@@ -1223,10 +1223,13 @@ def select_first_form_dropdown(label, allow_missing=False, target_option=None):
       2. Ant Design (на случай смешанной вёрстки на разных страницах).
       3. Геометрический фолбэк рядом с лейблом (framework-agnostic).
     """
+    target_tokens = []
     if "Контрагент" in label:
-        target_option = "ИП Алдажаров"
+        target_tokens = ["шарипжан маргулан", "шарипжан", "маргулан"]
     elif "Заказчик" in label:
-        target_option = "AI Group"
+        target_tokens = ["gi group", "rgb group", "gi_group"]
+    elif target_option:
+        target_tokens = [target_option]
 
     try:
         select_el = find_ui_kit_trigger_near_label(label)
@@ -1265,15 +1268,19 @@ def select_first_form_dropdown(label, allow_missing=False, target_option=None):
 
         target_el = None
         picked_text = ""
-        if target_option:
-            for opt in options:
-                if target_option.lower() in opt["text"].lower():
-                    target_el = opt["element"]
-                    picked_text = opt["text"]
+        if target_tokens:
+            for tok in target_tokens:
+                for opt in options:
+                    if tok.lower() in opt["text"].lower():
+                        target_el = opt["element"]
+                        picked_text = opt["text"]
+                        break
+                if target_el:
                     break
 
         if ("Контрагент" in label or "Заказчик" in label) and target_el is None:
-            raise RuntimeError(f'{label}: компания {target_option!r} не найдена')
+            opts_preview = [o["text"] for o in options[:10]]
+            raise RuntimeError(f"{label}: компания {target_tokens!r} не найдена среди {len(options)} опций: {opts_preview}")
         to_click = target_el if target_el else (options[0]["element"] if options else None)
         if not to_click:
             log(f"  ⚠ {label}: dropdown открылся, но опции не найдены", "WARN")
@@ -1743,7 +1750,7 @@ startxref
 
 
 # ==========================================
-# ПОДПИСАНТЫ — Заказчик=Бейсембаев Куаныш, Контрагент=Алдажаров Диас Талгатович
+# ПОДПИСАНТЫ — Заказчик=Талгат Ерланович, Контрагент=Ерлан Талгатович
 # В новом дизайне секция "Подписанты" видна прямо на главной вкладке
 # карточки договора (см. скрин 9) — карточки Заказчик/Контрагент с
 # кнопкой "Редактировать" у заголовка секции. Логика внутри модалки
@@ -2271,12 +2278,12 @@ def fill_signatories_in_card():
 
     # 2. Выбираем Заказчика и Контрагента (независимые повторы)
     ok_zakazchik = _select_in_ui_select(
-        "Выбрать заказчика", "Бейсембаев",
-        ["Бейсембаев Куаныш Едилович", "Куаныш Едилович Бейсембаев", "Бейсембаев"], "Заказчик")
+        "Выбрать заказчика", "Талгат",
+        ["Талгат Ерланович", "Ерланович Талгат", "Талгат"], "Заказчик")
 
     ok_kontragent = _select_in_ui_select(
-        "Выбрать контрагента", "Алд",
-        ["Алдажаров Диас Андреевич", "Алдажаров Диас", "Алд", "Талгатович Ерлан", "Ерлан"], "Контрагент")
+        "Выбрать контрагента", "Ерлан",
+        ["Ерлан Талгатович", "Талгатович Ерлан", "Ерлан"], "Контрагент")
 
     # 3. Сохраняем блок — кнопка ищется СТРОГО внутри signers-card,
     # чтобы не задеть кнопки всего договора
@@ -4017,7 +4024,7 @@ def main():
     log("  ✓ Форма открыта", "PASS")
 
     # --- ЭТАП 4: Форма (секция 1 "Основная информация" — открыта по умолчанию) ---
-    log("ЭТАП 4: Заполнение формы (Контрагент=ИП Алдажаров, Заказчик=AI Group)")
+    log("ЭТАП 4: Заполнение формы (Контрагент=ШАРИПЖАН МАРГУЛАН, Заказчик=GI Group)")
     _contract_type_target = {
         "type_uslug": "Договор услуг",
         "type_uslug_postavka": "Договор услуг и поставки",
@@ -4142,7 +4149,7 @@ def main():
     time.sleep(2)
 
     # --- ЭТАП 8: Подписанты ---
-    log("ЭТАП 8: Подписанты (Заказчик=Бейсембаев Куаныш, Контрагент=Алдажаров Диас Талгатович)")
+    log("ЭТАП 8: Подписанты (Заказчик=Талгат Ерланович, Контрагент=Ерлан Талгатович)")
     for retry in range(3):
         if fill_signatories_in_card():
             workflow_result["signatories"] = True
@@ -4296,7 +4303,7 @@ def main():
                 nca_password=THIRD_NCA_PASSWORD,
                 contract_url=workflow_result["url"],
                 p12_path=THIRD_P12_PATH,
-                role_name="Алдажаров Диас (Контрагент)"
+                role_name="Ерлан (Контрагент)"
             )
             if erlan_signed:
                 log("  ✓✓ Ерлан подписал", "PASS")

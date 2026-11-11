@@ -1069,9 +1069,9 @@ class GprTest:
         third_login_eff = THIRD_LOGIN if (THIRD_LOGIN and THIRD_LOGIN != login_val) else "aldazarovdias@gmail.com"
         third_pass_eff = THIRD_PASS if (THIRD_LOGIN and THIRD_LOGIN != login_val and THIRD_PASS) else "12341234"
         accounts = [
-            (THIRD_FIO, (third_login_eff, third_pass_eff, THIRD_P12_PATH, THIRD_NCA_PASSWORD)),
             ("Ерланович Талгат", ("marshar244@gmail.com", "12341234", THIRD_P12_PATH, THIRD_NCA_PASSWORD)),
-            ("Бейсембаев Куаныш Едилович", ("dias.aldazharov@bk.ru", "h7WxqKIR", THIRD_P12_PATH, THIRD_NCA_PASSWORD)),
+            ("Ерлан Талгатович", ("hhuh8918@gmail.com", "12341234", THIRD_P12_PATH, THIRD_NCA_PASSWORD)),
+            (THIRD_FIO, (third_login_eff, third_pass_eff, THIRD_P12_PATH, THIRD_NCA_PASSWORD)),
         ]
         for index, (fio, account) in enumerate(accounts):
             try:

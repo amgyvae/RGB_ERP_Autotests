@@ -104,13 +104,20 @@ pass_val = env("RGB_ACCOUNT1_PASSWORD", env("RGB_ACCOUNT1_PASSWORD_ALT", "123412
 NCA_PASSWORD = env("NCA_KEY1_PASSWORD")
 MAIN_P12_PATH = resolve_default_p12_path(1, env("NCA_KEY1_PATH"))
 
-# --- Второй подписант (Заказчик = Бейсембаев Куаныш, Контрагент = Алдажаров Диас) ---
-_raw_talgat_login = env("RGB_ACCOUNT3_LOGIN", env("RGB_ACCOUNT2_LOGIN"))
-_raw_talgat_pass = env("RGB_ACCOUNT3_PASSWORD", env("RGB_ACCOUNT2_PASSWORD"))
-TALGAT_LOGIN = _raw_talgat_login if (_raw_talgat_login and _raw_talgat_login != login_val) else "dias.aldazharov@bk.ru"
-TALGAT_PASS = _raw_talgat_pass if (_raw_talgat_login and _raw_talgat_login != login_val and _raw_talgat_pass) else "h7WxqKIR"
-TALGAT_NCA_PASSWORD = env("NCA_KEY2_PASSWORD")
+# --- Подписанты: Заказчик = Талгат Ерланович, Контрагент = Ерлан Талгатович ---
+_raw_talgat_login = env("RGB_ACCOUNT2_LOGIN")
+_raw_talgat_pass = env("RGB_ACCOUNT2_PASSWORD")
+TALGAT_LOGIN = _raw_talgat_login if (_raw_talgat_login and _raw_talgat_login != login_val) else "marshar244@gmail.com"
+TALGAT_PASS = _raw_talgat_pass if (_raw_talgat_login and _raw_talgat_login != login_val and _raw_talgat_pass) else "12341234"
+TALGAT_NCA_PASSWORD = env("NCA_KEY2_PASSWORD", "Aa1979")
 TALGAT_P12_PATH = resolve_default_p12_path(2, env("NCA_KEY2_PATH"))
+
+_raw_erlan_login = env("RGB_ACCOUNT3_LOGIN")
+_raw_erlan_pass = env("RGB_ACCOUNT3_PASSWORD")
+ERLAN_LOGIN = _raw_erlan_login if (_raw_erlan_login and _raw_erlan_login != login_val) else "hhuh8918@gmail.com"
+ERLAN_PASS = _raw_erlan_pass if (_raw_erlan_login and _raw_erlan_login != login_val and _raw_erlan_pass) else "12341234"
+ERLAN_NCA_PASSWORD = env("NCA_KEY1_PASSWORD", "Aa200616.")
+ERLAN_P12_PATH = resolve_default_p12_path(1, env("NCA_KEY1_PATH"))
 
 BASE_URL = "https://testportal.rgbgroup.kz/"
 WAYBILLS_URL = "https://testportal.rgbgroup.kz/documents/waybills"
@@ -943,10 +950,13 @@ def collect_options_generic():
 
 
 def select_first_form_dropdown(label, allow_missing=False, target_option=None):
+    target_tokens = []
     if "Контрагент" in label:
-        target_option = "ИП Алдажаров"
+        target_tokens = ["шарипжан маргулан", "шарипжан", "маргулан"]
     elif "Заказчик" in label:
-        target_option = "AI Group"
+        target_tokens = ["gi group", "rgb group", "gi_group"]
+    elif target_option:
+        target_tokens = [target_option]
 
     try:
         select_el = find_ui_kit_trigger_near_label(label)
@@ -985,15 +995,19 @@ def select_first_form_dropdown(label, allow_missing=False, target_option=None):
 
         target_el = None
         picked_text = ""
-        if target_option:
-            for opt in options:
-                if target_option.lower() in opt["text"].lower():
-                    target_el = opt["element"]
-                    picked_text = opt["text"]
+        if target_tokens:
+            for tok in target_tokens:
+                for opt in options:
+                    if tok.lower() in opt["text"].lower():
+                        target_el = opt["element"]
+                        picked_text = opt["text"]
+                        break
+                if target_el:
                     break
 
         if ("Контрагент" in label or "Заказчик" in label) and target_el is None:
-            raise RuntimeError(f'{label}: компания {target_option!r} не найдена')
+            opts_preview = [o["text"] for o in options[:10]]
+            raise RuntimeError(f"{label}: компания {target_tokens!r} не найдена среди {len(options)} опций: {opts_preview}")
         to_click = target_el if target_el else (options[0]["element"] if options else None)
         if not to_click:
             log(f"  ⚠ {label}: dropdown открылся, но опции не найдены", "WARN")
@@ -2883,11 +2897,11 @@ def fill_signatories_in_card():
             time.sleep(1.0)
 
     ok_zakazchik = _select_in_ui_select(
-        "Выбрать заказчика", "Бейсембаев",
-        ["Бейсембаев Куаныш Едилович", "Куаныш Едилович Бейсембаев", "Бейсембаев"], "Заказчик")
+        "Выбрать заказчика", "Талгат",
+        ["Талгат Ерланович", "Ерланович Талгат", "Талгат"], "Заказчик")
     ok_kontragent = _select_in_ui_select(
-        "Выбрать контрагента", "Алд",
-        ["Алдажаров Диас Андреевич", "Алдажаров Диас", "Алд", "Талгатович Ерлан", "Ерлан"], "Контрагент")
+        "Выбрать контрагента", "Ерлан",
+        ["Ерлан Талгатович", "Талгатович Ерлан", "Ерлан"], "Контрагент")
 
     _close_any_ui_select_panel()
     time.sleep(0.4)
@@ -2946,8 +2960,8 @@ def sign_waybill_by_talgat(waybill_url):
 
     any_signed = False
     for acc_label, acc_login, acc_pass, acc_nca_pwd, acc_p12 in [
-        ("Заказчик (Бейсембаев)", TALGAT_LOGIN, TALGAT_PASS, TALGAT_NCA_PASSWORD, TALGAT_P12_PATH),
-        ("Контрагент (Алдажаров)", "aldazarovdias@gmail.com", "12341234", NCA_PASSWORD, MAIN_P12_PATH),
+        ("Заказчик (Талгат Ерланович)", TALGAT_LOGIN, TALGAT_PASS, TALGAT_NCA_PASSWORD, TALGAT_P12_PATH),
+        ("Контрагент (Ерлан Талгатович)", ERLAN_LOGIN, ERLAN_PASS, ERLAN_NCA_PASSWORD, ERLAN_P12_PATH),
     ]:
         if not logout_current_account():
             driver.get(BASE_URL)
@@ -3229,7 +3243,7 @@ def main():
     time.sleep(2)
 
     # --- ЭТАП 8: Подписанты ---
-    log("ЭТАП 8: Подписанты (Заказчик=Бейсембаев, Контрагент=Алдажаров Диас)")
+    log("ЭТАП 8: Подписанты (Заказчик=Талгат Ерланович, Контрагент=Ерлан Талгатович)")
     for retry in range(3):
         if fill_signatories_in_card():
             workflow_result["signatories"] = True

@@ -131,18 +131,21 @@ driver.implicitly_wait(0)  # сразу 0, а не 3 — см. пояснени�
 login_val = env("RGB_ACCOUNT1_LOGIN", "jyktmargyplay2@gmail.com")
 pass_val = env("RGB_ACCOUNT1_PASSWORD", env("RGB_ACCOUNT1_PASSWORD_ALT", "12341234"))
 
-# --- ЭЦП первого подписанта ---
-NCA_PASSWORD = env("NCA_KEY1_PASSWORD")
-MAIN_P12_PATH = resolve_default_p12_path(1, env("NCA_KEY1_PATH"))
-
-# --- Аккаунт для второго подписания (Талгат Ерланович / Бейсембаев Куаныш) ---
-TALGAT_LOGIN = env("RGB_ACCOUNT3_LOGIN", env("RGB_ACCOUNT2_LOGIN", "dias.aldazharov@bk.ru"))
-TALGAT_PASS = env("RGB_ACCOUNT3_PASSWORD", env("RGB_ACCOUNT2_PASSWORD", "h7WxqKIR"))
-if not TALGAT_LOGIN or TALGAT_LOGIN.strip().lower() == login_val.strip().lower():
-    TALGAT_LOGIN = "dias.aldazharov@bk.ru"
-    TALGAT_PASS = "h7WxqKIR"
-TALGAT_NCA_PASSWORD = env("NCA_KEY2_PASSWORD")
+# --- Подписанты: Заказчик = Талгат Ерланович, Контрагент = Ерлан Талгатович ---
+_raw_talgat_login = env("RGB_ACCOUNT2_LOGIN")
+_raw_talgat_pass = env("RGB_ACCOUNT2_PASSWORD")
+TALGAT_LOGIN = _raw_talgat_login if (_raw_talgat_login and _raw_talgat_login != login_val) else "marshar244@gmail.com"
+TALGAT_PASS = _raw_talgat_pass if (_raw_talgat_login and _raw_talgat_login != login_val and _raw_talgat_pass) else "12341234"
+TALGAT_NCA_PASSWORD = env("NCA_KEY2_PASSWORD", "Aa1979")
 TALGAT_P12_PATH = resolve_default_p12_path(2, env("NCA_KEY2_PATH"))
+
+_raw_contractor_login = env("RGB_CONTRACTOR_LOGIN", env("RGB_ACCOUNT3_LOGIN"))
+_raw_contractor_pass = env("RGB_CONTRACTOR_PASSWORD", env("RGB_ACCOUNT3_PASSWORD"))
+CONTRACTOR_LOGIN = _raw_contractor_login if (_raw_contractor_login and _raw_contractor_login != login_val) else "hhuh8918@gmail.com"
+CONTRACTOR_PASS = _raw_contractor_pass if (_raw_contractor_login and _raw_contractor_login != login_val and _raw_contractor_pass) else "12341234"
+CONTRACTOR_NCA_PASSWORD = env("NCA_KEY1_PASSWORD", "Aa200616.")
+MAIN_P12_PATH = resolve_default_p12_path(1, env("NCA_KEY1_PATH"))
+NCA_PASSWORD = CONTRACTOR_NCA_PASSWORD
 
 BASE_URL = "https://testportal.rgbgroup.kz/"
 ACTS_URL = "https://testportal.rgbgroup.kz/documents/acts"
@@ -1115,10 +1118,13 @@ def select_first_form_dropdown(label, allow_missing=False, target_option=None):
       2. Ant Design (на случай смешанной вёрстки на разных страницах).
       3. Геометрический фолбэк рядом с лейблом (framework-agnostic).
     """
+    target_tokens = []
     if "Контрагент" in label:
-        target_option = "ИП Алдажаров"
+        target_tokens = ["шарипжан маргулан", "шарипжан", "маргулан"]
     elif "Заказчик" in label:
-        target_option = "AI Group"
+        target_tokens = ["gi group", "rgb group", "gi_group"]
+    elif target_option:
+        target_tokens = [target_option]
 
     try:
         select_el = find_ui_kit_trigger_near_label(label)
@@ -1157,15 +1163,19 @@ def select_first_form_dropdown(label, allow_missing=False, target_option=None):
 
         target_el = None
         picked_text = ""
-        if target_option:
-            for opt in options:
-                if target_option.lower() in opt["text"].lower():
-                    target_el = opt["element"]
-                    picked_text = opt["text"]
+        if target_tokens:
+            for tok in target_tokens:
+                for opt in options:
+                    if tok.lower() in opt["text"].lower():
+                        target_el = opt["element"]
+                        picked_text = opt["text"]
+                        break
+                if target_el:
                     break
 
         if ("Контрагент" in label or "Заказчик" in label) and target_el is None:
-            raise RuntimeError(f'{label}: компания {target_option!r} не найдена')
+            opts_preview = [o["text"] for o in options[:10]]
+            raise RuntimeError(f"{label}: компания {target_tokens!r} не найдена среди {len(options)} опций: {opts_preview}")
         to_click = target_el if target_el else (options[0]["element"] if options else None)
         if not to_click:
             log(f"  ⚠ {label}: dropdown открылся, но опции не найдены", "WARN")
@@ -1267,7 +1277,7 @@ def create_test_pdf(name_hint='document'):
 
 
 # ==========================================
-# ПОДПИСАНТЫ — Заказчик=Бейсембаев Куаныш Ерланович, Контрагент=Алдажаров Диас Бейсембаев Куанышович
+# ПОДПИСАНТЫ — Заказчик=Талгат Ерланович, Контрагент=Ерлан Талгатович
 # В новом дизайне секция "Подписанты" видна прямо на главной вкладке
 # карточки договора (см. скрин 9) — карточки Заказчик/Контрагент с
 # кнопкой "Редактировать" у заголовка секции. Логика внутри модалки
@@ -1845,30 +1855,14 @@ def click_tree_leaf():
                 continue
     return None
 
-def add_approval_route(approver_query="Алд"):
-    """МАРШРУТ СОГЛАСОВАНИЯ — строгая последовательность (как просил
-    пользователь):
+def add_approval_route(approver_query="Margulan"):
+    """МАРШРУТ СОГЛАСОВАНИЯ — строгая последовательность:
         ШАГ 1: нажать «Добавить этап» (button.evd-empty-stub__action)
                или «+ Этап» (button.evd-route__add-badge)
         ШАГ 2: дождаться появления строки этапа с селектом
         ШАГ 3: открыть селект «Выбрать согласующего»
-        ШАГ 4: найти и выбрать «Sh Алдажаров Диас Ju»
+        ШАГ 4: найти и выбрать «Sh Margulan Ju»
         ШАГ 5: проверить, что имя реально проставилось
-
-    Разметка (подтверждено DevTools):
-      section.evd-route[.evd-route--empty]
-        div.evd-route__head > button.evd-route__add-badge   («+ Этап»)
-        div.evd-empty-stub > button.evd-empty-stub__action  («Добавить этап»)
-        div.evd-route__stages > div.evd-route__stage
-          table.evd-route__table > tbody > tr > td.evd-route__td
-            div.ui-select > button.ui-select__trigger--placeholder
-              span.ui-select__value «Выбрать согласующего»
-      Панель: div.ui-select__panel[role=listbox]
-        div.ui-select__search > input.ui-select__search-input
-        ul.ui-select__list > li.ui-select__group
-          div.ui-select__group-label «Внутренние»
-          ul.ui-select__group-list > li > button[role=option].ui-select__option
-            span.ui-select__option-label «Sh Алдажаров Диас Ju»
     """
     exit_edit_mode()
     dismiss_chrome_password_popup()
@@ -1896,15 +1890,7 @@ def add_approval_route(approver_query="Алд"):
         return None
 
     def approver_in_route():
-        """Имя реально стоит в строке этапа.
-
-        Два состояния разметки:
-          а) до сохранения — <span class="ui-select__value">Имя</span>
-          б) ПОСЛЕ сохранения модалки — обычный текст в ячейке
-             td.evd-route__td (см. скриншот: в таблице '1 | Алдажаров Диас Sh')
-        Проверяем оба, иначе после успешного сохранения функция
-        возвращала False и цикл начинал маршрут заново.
-        """
+        """Имя реально стоит в строке этапа."""
         try:
             vals = driver.find_elements(
                 By.XPATH,
@@ -1914,7 +1900,8 @@ def add_approval_route(approver_query="Алд"):
                 if not v.is_displayed():
                     continue
                 txt = (v.get_attribute("textContent") or "").strip()
-                if "алд" in txt.lower() and "выбрать" not in txt.lower():
+                low = txt.lower()
+                if ("margulan" in low or "маргулан" in low or "талгат" in low) and "выбрать" not in low:
                     return True
         except Exception:
             pass
@@ -1935,7 +1922,7 @@ def add_approval_route(approver_query="Алд"):
                 if low.isdigit() or "выбрать" in low:
                     continue
                 # непустая ячейка с именем (не номер, не прочерк)
-                if "алд" in low and len(txt) > 2 and any(ch.isalpha() for ch in txt):
+                if ("margulan" in low or "маргулан" in low or "талгат" in low) and len(txt) > 2 and any(ch.isalpha() for ch in txt):
                     return True
         except Exception:
             pass
@@ -2062,7 +2049,7 @@ def add_approval_route(approver_query="Алд"):
         dump_route_html("panel_not_open")
         return False
 
-    # ---------- ШАГ 4: найти и выбрать Sh Алдажаров Диас ----------
+    # ---------- ШАГ 4: найти и выбрать Sh Margulan Ju ----------
     log(f"  Шаг 4: ищу '{approver_query}' в списке")
 
     def panel_options():
@@ -2118,17 +2105,16 @@ def add_approval_route(approver_query="Алд"):
         f"{[o['text'] for o in options][:15]}", "DIAG")
 
     option = None
-    for opt in options:
-        txt = (opt["text"] or "").lower()
-        if "алд" in txt:
-            option = opt
-            break
-    if not option:
+    for cand in [approver_query, "margulan", "маргулан", "талгат"]:
         for opt in options:
             txt = (opt["text"] or "").lower()
-            if approver_query.lower() in txt:
+            if cand.lower() in txt:
                 option = opt
                 break
+        if option:
+            break
+    if not option and options:
+        option = options[0]
 
 
     if not option:
@@ -3452,11 +3438,11 @@ def fill_signatories_in_card():
             time.sleep(1.0)
 
     ok_zakazchik = _select_in_ui_select(
-        "Выбрать заказчика", "Бейсембаев",
-        ["Бейсембаев Куаныш", "Бейсембаев"], "Заказчик")
+        "Выбрать заказчика", "Талгат",
+        ["Талгат Ерланович", "Ерланович Талгат", "Талгат"], "Заказчик")
     ok_kontragent = _select_in_ui_select(
-        "Выбрать контрагента", "Алд",
-        ["Алдажаров Диас Андреевич", "Алдажаров Диас", "Алд"], "Контрагент")
+        "Выбрать контрагента", "Ерлан",
+        ["Ерлан Талгатович", "Талгатович Ерлан", "Ерлан"], "Контрагент")
 
     _close_any_ui_select_panel()
     time.sleep(0.4)
@@ -3583,7 +3569,7 @@ def choose_ncalayer_method():
 
 
 def sign_act_with_ecp():
-    """Sign as Алдажаров Диас using the certificate configured by the user."""
+    """Sign as Ерлан Талгатович using the certificate configured by the user."""
     act_url = workflow_result.get('url')
     if not act_url:
         raise RuntimeError('URL акта неизвестен перед подписью контрагента')
@@ -3605,8 +3591,8 @@ def sign_act_with_ecp():
                 ok = sign_with_ncalayer(password=NCA_PASSWORD, p12_path=MAIN_P12_PATH)
                 if ok:
                     workflow_result["signed"] = True
-                    workflow_result["actions_done"].append("Алдажаров Диас: ЭЦП OK")
-                    log("  ✓ Акт подписан ЭЦП контрагентом Алдажаров Диас", "PASS")
+                    workflow_result["actions_done"].append("Ерлан Талгатович: ЭЦП OK")
+                    log("  ✓ Акт подписан ЭЦП контрагентом Ерлан Талгатович", "PASS")
                 else:
                     workflow_result["fail_reasons"]["Подписание ЭЦП"] = (
                         "sign_with_ncalayer() вернул неуспех — см. лог NCALayer выше "
@@ -3626,9 +3612,9 @@ def sign_act_with_ecp():
 
 
 def sign_act_by_talgat(act_url):
-    """Первый подписант (заказчик — Бейсембаев, dias.aldazharov@bk.ru) подписывает акт сертификатом GOST512."""
+    """Первый подписант (заказчик — Талгат Ерланович, marshar244@gmail.com) подписывает акт сертификатом GOST512."""
     log("=" * 60)
-    log("Бейсембаев Куаныш подписывает акт (marshar244, GOST512)")
+    log("Талгат Ерланович подписывает акт (marshar244, GOST512)")
     log("=" * 60)
     if not act_url:
         log("  ⚠ URL акта неизвестен", "WARN")
@@ -3638,7 +3624,7 @@ def sign_act_by_talgat(act_url):
         driver.get(BASE_URL)
         time.sleep(4)
     if not login_with(TALGAT_LOGIN, TALGAT_PASS):
-        log("  ⚠ Не удалось войти под Бейсембаев Куанышом", "WARN")
+        log("  ⚠ Не удалось войти под Талгатом Ерлановичем", "WARN")
         return False
 
     dismiss_chrome_password_popup()
@@ -4251,15 +4237,15 @@ def sign_electronic_act_in_order():
     """Portal signing order: customer first, contractor second."""
     workflow_result['first_signature'] = False
     workflow_result['second_signature'] = False
-    log('ЭТАП 9: заказчик Бейсембаев Куаныш подписывает первым')
+    log('ЭТАП 9: заказчик Талгат Ерланович подписывает первым')
     workflow_result['first_signature'] = bool(sign_act_by_talgat(workflow_result['url']))
     if not workflow_result['first_signature']:
-        workflow_result['fail_reasons']['Подписание'] = 'Не подтверждена подпись заказчика Бейсембаева'
+        workflow_result['fail_reasons']['Подписание'] = 'Не подтверждена подпись заказчика Талгата'
         return False
-    log('ЭТАП 10: вход под Алдажаровым Диасом и подпись контрагента')
+    log('ЭТАП 10: вход под Ерланом Талгатовичем и подпись контрагента')
     workflow_result['second_signature'] = bool(sign_act_with_ecp())
     if not workflow_result['second_signature']:
-        workflow_result['fail_reasons']['Подписание'] = 'Не подтверждена подпись контрагента Алдажарова'
+        workflow_result['fail_reasons']['Подписание'] = 'Не подтверждена подпись контрагента Ерлана'
         return False
     workflow_result['final_status'] = get_current_status()
     return workflow_result['final_status'] == 'Подписан'
@@ -4402,7 +4388,7 @@ def main():
             "не удалось создать этап или выбрать Sh Margulan Ju в маршруте")
 
     # --- ЭТАП 6: Подписанты ---
-    log("ЭТАП 6: Подписанты (Заказчик=Бейсембаев, Контрагент=Алдажаров Диас)")
+    log("ЭТАП 6: Подписанты (Заказчик=Талгат Ерланович, Контрагент=Ерлан Талгатович)")
     for retry in range(3):
         if fill_signatories_in_card():
             workflow_result["signatories"] = True

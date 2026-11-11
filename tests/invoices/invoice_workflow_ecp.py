@@ -1020,10 +1020,13 @@ def select_first_form_dropdown(label, allow_missing=False, target_option=None):
       2. Ant Design (на случай смешанной вёрстки на разных страницах).
       3. Геометрический фолбэк рядом с лейблом (framework-agnostic).
     """
+    target_tokens = []
     if "Контрагент" in label:
-        target_option = "ИП Алдажаров"
+        target_tokens = ["шарипжан маргулан", "шарипжан", "маргулан"]
     elif "Заказчик" in label:
-        target_option = "AI Group"
+        target_tokens = ["gi group", "rgb group", "gi_group"]
+    elif target_option:
+        target_tokens = [target_option]
 
     try:
         select_el = find_ui_kit_trigger_near_label(label)
@@ -1062,15 +1065,19 @@ def select_first_form_dropdown(label, allow_missing=False, target_option=None):
 
         target_el = None
         picked_text = ""
-        if target_option:
-            for opt in options:
-                if target_option.lower() in opt["text"].lower():
-                    target_el = opt["element"]
-                    picked_text = opt["text"]
+        if target_tokens:
+            for tok in target_tokens:
+                for opt in options:
+                    if tok.lower() in opt["text"].lower():
+                        target_el = opt["element"]
+                        picked_text = opt["text"]
+                        break
+                if target_el:
                     break
 
         if ("Контрагент" in label or "Заказчик" in label) and target_el is None:
-            raise RuntimeError(f'{label}: компания {target_option!r} не найдена')
+            opts_preview = [o["text"] for o in options[:10]]
+            raise RuntimeError(f"{label}: компания {target_tokens!r} не найдена среди {len(options)} опций: {opts_preview}")
         to_click = target_el if target_el else (options[0]["element"] if options else None)
         if not to_click:
             log(f"  ⚠ {label}: dropdown открылся, но опции не найдены", "WARN")
@@ -2465,9 +2472,9 @@ def select_invoice_dropdown(label, allow_missing=False, target_option=None):
     """Заказчик → AI Group, Контрагент → ИП Алдажаров,
     Ставка НДС → 16%, остальные → первый доступный."""
     if "Заказчик" in label:
-        target_option = "AI Group"
+        target_option = "GI Group"
     elif "Контрагент" in label:
-        target_option = "ИП Алдажаров"
+        target_option = "ШАРИПЖАН МАРГУЛАН"
 
     trigger = find_ui_kit_trigger_near_label(label)
     if not trigger:
@@ -2843,9 +2850,9 @@ def create_invoice_via_modal():
     # оставалась неактивной. Старые варианты "Выдать сотруднику"/
     # "Контрагент" оставлены как запасные — похоже на устаревшие
     # названия того же поля в предыдущей версии формы.
-    if not pick_in_modal("Получатель", target="ИП Алдажаров", required=False):
+    if not pick_in_modal("Получатель", target="ШАРИПЖАН МАРГУЛАН", required=False):
         if not pick_in_modal("Выдать сотруднику", required=False):
-            pick_in_modal("Контрагент", target="ИП Алдажаров", required=False)
+            pick_in_modal("Контрагент", target="ШАРИПЖАН МАРГУЛАН", required=False)
     time.sleep(0.3)
     pick_in_modal("Проект")
     time.sleep(0.3)
