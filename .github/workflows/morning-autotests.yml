@@ -191,7 +191,9 @@ jobs:
           RGB_ACCOUNT1_LOGIN: jyktmargyplay2@gmail.com
         run: |
           TARGET_MODULES=""
-          if [[ "$INPUT_PRESET" == ecp* ]]; then
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            TARGET_MODULES="all"
+          elif [[ "$INPUT_PRESET" == ecp* ]]; then
             TARGET_MODULES="ecp"
           elif [[ "$INPUT_PRESET" == web* ]]; then
             TARGET_MODULES="web"
