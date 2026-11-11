@@ -5,6 +5,7 @@
 service_account.json
 *service_account*.json
 *.p12
+!certs/*.p12
 
 # ===== Результаты прогонов (генерируются автоматически) =====
 logs/

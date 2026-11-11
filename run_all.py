@@ -50,8 +50,8 @@ MODULES = {
     "gpr":         ("ГПР",                     [RUNNER, os.path.join("tests", "gpr", "gpr_test.py")],                           True),
     "contracts":   ("Договоры",                [RUNNER, os.path.join("tests", "contracts", "contract_workflow_new_design.py"), "default"], True),
     "waybills":    ("Накладные",               [RUNNER, os.path.join("tests", "waybills", "waybill_workflow_new_design.py"), "default"],   True),
-    "invoices":    ("Счета на оплату",         [RUNNER, os.path.join("tests", "invoices", "invoice_workflow_ecp.py"), "default"],          True),
-    "acts":        ("Акты (АВР, КС-2, Ф-2В)",  [RUNNER, os.path.join("tests", "acts", "test-akt.py"), "avr", "default"],                          True),
+    "invoices":    ("Счета на оплату",         [RUNNER, os.path.join("tests", "invoices", "invoice_workflow_ecp.py"), "all"],              True),
+    "acts":        ("Акты (АВР, КС-2, Ф-2В)",  [RUNNER, os.path.join("tests", "acts", "test-akt.py"), "avr", "default"],                   True),
 }
 
 
@@ -67,10 +67,10 @@ MODULE_PLANNED_CHECKS = {
     "news": 17,
     "manager": 16,
     "tasks": 30,
-    "gpr": 30,
-    "contracts": 26,
-    "waybills": 18,
-    "invoices": 16,
+    "gpr": 21,
+    "contracts": 19,
+    "waybills": 9,
+    "invoices": 8,
     "acts": 19,
 }
 
