@@ -1173,16 +1173,28 @@ def step(label, fn, *args, **kwargs):
     log("=" * 60)
     start_idx = len(LOG_LINES)
     ok = False
-    try:
-        ok = bool(fn(*args, **kwargs))
-    except Exception as e:
-        log(f"  ⚠ Исключение: {e}", "FAIL")
+    for _attempt in (1, 2):
         try:
-            import traceback
-            for tb in traceback.format_exc().split("\n"):
-                log(f"    {tb}")
-        except Exception:
-            pass
+            ok = bool(fn(*args, **kwargs))
+            break
+        except Exception as e:
+            stale = 'stale element' in str(e).lower()
+            if stale and _attempt == 1:
+                log("  ↻ stale element — повторяю этап один раз", "WARN")
+                try:
+                    driver.refresh()
+                    time.sleep(3)
+                except Exception:
+                    pass
+                continue
+            log(f"  ⚠ Исключение: {e}", "FAIL")
+            try:
+                import traceback
+                for tb in traceback.format_exc().split("\n"):
+                    log(f"    {tb}")
+            except Exception:
+                pass
+            break
     if not ok:
         shot(f"fail_{label}")
     record(label, ok, reason="" if ok else (_last_problem(start_idx) or "см. лог"))

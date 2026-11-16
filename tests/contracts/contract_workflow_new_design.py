@@ -1266,6 +1266,29 @@ def select_first_form_dropdown(label, allow_missing=False, target_option=None):
         time.sleep(0.8)
         options = collect_options() or collect_options_generic()
 
+        # Если нужной компании нет в видимой части списка — ищем через поле поиска панели
+        if target_tokens and not any(
+                tok.lower() in o["text"].lower() for tok in target_tokens for o in options):
+            for tok in target_tokens:
+                try:
+                    sinps = [s for s in driver.find_elements(
+                        By.XPATH, "//div[contains(@class,'ui-select__panel')]"
+                                  "//input[contains(@class,'ui-select__search-input')]")
+                        if s.is_displayed()]
+                    if not sinps:
+                        break
+                    sinp = sinps[-1]
+                    sinp.send_keys(Keys.CONTROL + "a")
+                    sinp.send_keys(Keys.BACKSPACE)
+                    time.sleep(0.2)
+                    sinp.send_keys(tok.split()[0] if tok.lower() != "gi group" else "GI")
+                    time.sleep(1.3)
+                    options = collect_options() or collect_options_generic() or options
+                    if any(tok.lower() in o["text"].lower() for o in options):
+                        break
+                except Exception:
+                    break
+
         target_el = None
         picked_text = ""
         if target_tokens:
@@ -2156,9 +2179,7 @@ def _select_in_ui_select(placeholder_text, search_text, option_keywords,
             if target:
                 break
 
-        if not target and opts:
-            target = opts[0]
-            log(f"    • {field_name}: '{search_text}' не найден — беру первую доступную опцию '{target['text']}'")
+        # Строго: чужого человека не подставляем (порядок подписантов важен)
 
         if not target:
             log(f"    ⚠ {field_name}: '{search_text}' не найден среди опций "
@@ -2278,12 +2299,12 @@ def fill_signatories_in_card():
 
     # 2. Выбираем Заказчика и Контрагента (независимые повторы)
     ok_zakazchik = _select_in_ui_select(
-        "Выбрать заказчика", "Талгат",
-        ["Талгат Ерланович", "Ерланович Талгат", "Талгат"], "Заказчик")
+        "Выбрать заказчика", "Ерланович",
+        ["Ерланович Талгат", "Талгат Ерланович"], "Заказчик")
 
     ok_kontragent = _select_in_ui_select(
-        "Выбрать контрагента", "Ерлан",
-        ["Ерлан Талгатович", "Талгатович Ерлан", "Ерлан"], "Контрагент")
+        "Выбрать контрагента", "Талгатович",
+        ["Талгатович Ерлан", "Ерлан Талгатович"], "Контрагент")
 
     # 3. Сохраняем блок — кнопка ищется СТРОГО внутри signers-card,
     # чтобы не задеть кнопки всего договора
