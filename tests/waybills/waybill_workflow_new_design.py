@@ -226,6 +226,15 @@ def log(msg, tag="INFO"):
             pass
 
 
+def tg_info(text):
+    """Строка в блок «Ход процесса» детального отчёта Telegram + обычный лог."""
+    log(text)
+    try:
+        print("TGINFO| " + str(text), flush=True)
+    except Exception:
+        pass
+
+
 def shot(name):
     try:
         path = screen_path(f"debug_waybill_{name}_{datetime.now().strftime('%H%M%S')}.png")
@@ -3011,6 +3020,12 @@ def sign_waybill_by_talgat(waybill_url):
         shot("talgat_opened_waybill")
         cur_st = get_current_status()
         log(f"  Статус накладной ({acc_label}): '{cur_st}'")
+        try:
+            from route_helper import current_user_name
+            tg_info(f"🔑 Вход под {acc_label}: {acc_login} → на сайте «{current_user_name(driver) or '?'}», "
+                    f"статус накладной: «{cur_st}»")
+        except Exception:
+            pass
 
         for sign_btn in ["Подписать заказчиком", "Подписать контрагентом", "Подписать и отправить", "Подписать", "Подтвердить подписание"]:
             if click_card_action(sign_btn):
@@ -3025,6 +3040,8 @@ def sign_waybill_by_talgat(waybill_url):
                 time.sleep(6)
                 status = get_current_status()
                 log(f"  {acc_label}: '{sign_btn}' → '{status}'", "PASS" if signed else "WARN")
+                tg_info(("✍️ ЭЦП поставлена" if signed else "❌ ЭЦП НЕ поставлена")
+                        + f" ({acc_label}): «{sign_btn}» → статус «{status}»")
                 workflow_result["actions_done"].append(f"{acc_label}: {sign_btn} → {status}")
                 workflow_result["final_status"] = status
                 break

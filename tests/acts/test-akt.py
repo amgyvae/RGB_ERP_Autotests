@@ -279,6 +279,15 @@ def log(msg, tag="INFO"):
             pass
 
 
+def tg_info(text):
+    """Строка в блок «Ход процесса» детального отчёта Telegram + обычный лог."""
+    log(text)
+    try:
+        print("TGINFO| " + str(text), flush=True)
+    except Exception:
+        pass
+
+
 def shot(name):
     try:
         path = screen_path(f"debug_act_{name}_{datetime.now().strftime('%H%M%S')}.png")
@@ -4258,6 +4267,12 @@ def sign_electronic_act_in_order():
     """Portal signing order: customer first, contractor second."""
     workflow_result['first_signature'] = False
     workflow_result['second_signature'] = False
+    try:
+        from route_helper import route_summary, signers_summary
+        tg_info("📋 Маршрут согласования: " + route_summary(driver))
+        tg_info("✍️ Подписанты: " + signers_summary(driver))
+    except Exception:
+        pass
     log('ЭТАП 9: заказчик Талгат Ерланович подписывает первым')
     workflow_result['first_signature'] = bool(sign_act_by_talgat(workflow_result['url']))
     if not workflow_result['first_signature']:

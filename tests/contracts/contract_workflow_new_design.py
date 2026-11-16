@@ -222,6 +222,15 @@ def log(msg, tag="INFO"):
             pass
 
 
+def tg_info(text):
+    """Строка в блок «Ход процесса» детального отчёта Telegram + обычный лог."""
+    log(text)
+    try:
+        print("TGINFO| " + str(text), flush=True)
+    except Exception:
+        pass
+
+
 def shot(name):
     try:
         path = screen_path(f"debug_{name}_{datetime.now().strftime('%H%M%S')}.png")
@@ -3848,6 +3857,12 @@ def sign_by_account(account_login, account_pass, nca_password, contract_url,
 
     status_before = get_current_status()
     log(f"  Статус под {role_name}: '{status_before}'")
+    try:
+        from route_helper import current_user_name
+        tg_info(f"🔑 Вход под {role_name}: {account_login} → на сайте «{current_user_name(driver) or '?'}», "
+                f"статус договора: «{status_before}»")
+    except Exception:
+        pass
 
     signed = False
     for sign_btn in ["Подписать заказчиком", "Подписать контрагентом", "Подписать и отправить", "Подписать", "Подтвердить подписание"]:
@@ -3863,12 +3878,16 @@ def sign_by_account(account_login, account_pass, nca_password, contract_url,
             status = get_current_status()
             log(f"  {role_name}: '{sign_btn}' → '{status}'",
                 "PASS" if signed else "WARN")
+            tg_info(("✍️ ЭЦП поставлена" if signed else "❌ ЭЦП НЕ поставлена")
+                    + f" ({role_name}): «{sign_btn}» → статус «{status}»")
             workflow_result["actions_done"].append(
                 f"{role_name} ({account_login}): {sign_btn} → {status}")
             workflow_result["final_status"] = status
             return signed
 
     log(f"  ⚠ Кнопка 'Подписать' не найдена под {role_name}", "WARN")
+    tg_info(f"❌ Под {role_name} кнопка «Подписать» не найдена (статус «{status_before}») — "
+            f"возможно, очередь подписания ещё не дошла до этого человека")
     shot(f"no_sign_btn_{role_name}")
     return False
 
@@ -4168,6 +4187,18 @@ def main():
 
     go_to_general_info()
     time.sleep(2)
+    try:
+        from route_helper import route_summary, route_names, is_margulan_name, current_user_name
+        _rs = route_summary(driver)
+        _rn = route_names(driver)
+        _route_ok = bool(_rn) and all(is_margulan_name(n) for n in _rn)
+        tg_info(f"👤 Вошли как: {current_user_name(driver) or login_val} (создатель договора)")
+        tg_info(("✅" if _route_ok else "❌") + f" Маршрут согласования: {_rs}"
+                + ("" if _route_ok else " — ожидался только Sh Margulan Ju"))
+        if not _route_ok:
+            workflow_result["approval_route"] = False
+    except Exception as _e:
+        log(f"  ⚠ Не удалось прочитать маршрут: {_e}", "WARN")
 
     # --- ЭТАП 8: Подписанты ---
     log("ЭТАП 8: Подписанты (Заказчик=Талгат Ерланович, Контрагент=Ерлан Талгатович)")
@@ -4187,6 +4218,16 @@ def main():
             go_to_general_info()
             time.sleep(3)
     time.sleep(2)
+    try:
+        from route_helper import signers_summary
+        _ss = signers_summary(driver)
+        _order_ok = ("ерланович талгат" in _ss.lower() and "талгатович ерлан" in _ss.lower()
+                     and _ss.lower().find("ерланович талгат") < _ss.lower().find("талгатович ерлан"))
+        tg_info(("✅" if _order_ok else "❌") + " Подписанты (1-й — Заказчик, 2-й — Контрагент): " + _ss)
+        tg_info("ℹ️ Талгат Ерланович в списке сайта отображается как «Ерланович Талгат» (marshar244@gmail.com), "
+                "Ерлан Талгатович — как «Талгатович Ерлан» (hhuh8918@gmail.com)")
+    except Exception as _e:
+        log(f"  ⚠ Не удалось прочитать подписантов: {_e}", "WARN")
 
     # --- ЭТАП 9: Предмет договора (теперь отдельная страница) ---
     log("ЭТАП 9: Предмет договора")
@@ -4210,7 +4251,7 @@ def main():
     time.sleep(3)
 
     # --- ЭТАП 9.1: Передать исполнителю (если есть) ---
-    for pass_btn in ["Передать исполнителю", "Передать"]:
+    for pass_btn in ["Передать исполнителю"]:
         if click_card_action(pass_btn):
             time.sleep(3)
             try:
@@ -4221,18 +4262,19 @@ def main():
             st_pass = get_current_status()
             log(f"  '{pass_btn}' → статус: '{st_pass}'", "PASS")
             workflow_result["actions_done"].append(f"{pass_btn} → {st_pass}")
-            if any(w in (st_pass or "").lower() for w in ["исполн", "действ", "подпис"]):
-                workflow_result["ecp_signed"] = True
-                workflow_result["final_status"] = st_pass
+            workflow_result["final_status"] = st_pass
             break
 
-    if workflow_result.get("ecp_signed") and any(w in (workflow_result.get("final_status") or "").lower() for w in ["исполн", "действ", "подпис"]):
+    # Договор считается завершённым только при финальном статусе. «На исполнении» —
+    # это НЕ конец: дальше нужно «Передать на согласование» → согласовать → подписать.
+    _final_now = (workflow_result.get("final_status") or "").strip().lower()
+    if _final_now in ("подписан", "действует", "исполнен"):
         log(f"  ✓ Договор уже переведён в статус '{workflow_result['final_status']}' — этапы согласования и подписания завершены", "PASS")
     else:
         # --- ЭТАП 10: На согласование ---
         log("ЭТАП 9: 'На согласование'")
         sent_to_approval = False
-        for btn in ["На согласование", "Отправить на согласование"]:
+        for btn in ["Передать на согласование", "На согласование", "Отправить на согласование"]:
             if click_card_action(btn):
                 time.sleep(4)
                 try:
@@ -4242,6 +4284,7 @@ def main():
                     pass
                 status = get_current_status()
                 log(f"  Статус: '{status}'", "PASS")
+                tg_info(f"📤 Нажата «{btn}» → статус: «{status}»")
                 workflow_result["actions_done"].append(f"На согласование → {status}")
                 workflow_result["final_status"] = status
                 sent_to_approval = True
@@ -4265,6 +4308,7 @@ def main():
                 time.sleep(5)
                 status = get_current_status()
                 log(f"  '{approve_btn}' → статус: '{status}'", "PASS")
+                tg_info(f"✅ Согласовано под Sh Margulan Ju: нажата «{approve_btn}» → статус: «{status}»")
                 workflow_result["actions_done"].append(f"{approve_btn} → {status}")
                 workflow_result["final_status"] = status
                 approved = True

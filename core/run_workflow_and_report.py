@@ -600,6 +600,23 @@ def require_sheet_write(result, expected):
         raise RuntimeError(f'Google Sheets: записано {written} из {expected} строк')
 
 
+def _collect_tginfo(limit: int = 40):
+    """Строки 'TGINFO| ...' из консольного лога последнего запущенного скрипта."""
+    try:
+        path = _LAST_CONSOLE_LOG
+        if not path or not Path(path).is_file():
+            return []
+        out = []
+        for raw in Path(path).read_text(encoding="utf-8", errors="replace").splitlines():
+            if "TGINFO| " in raw:
+                text = raw.split("TGINFO| ", 1)[1].strip()
+                if text and text not in out:
+                    out.append(text[:400])
+        return out[-limit:]
+    except Exception:
+        return []
+
+
 def send_telegram_summary(script_name: str, findings: list, reasons: dict,
                           *, skipped=(), error="", sheet_error="", screenshot=None,
                           duration_sec: float = 0.0):
@@ -666,6 +683,13 @@ def send_telegram_summary(script_name: str, findings: list, reasons: dict,
 
     if not findings and not skipped and not error:
         lines.append("Нет результатов выполненных проверок. Подробности в локальном логе.")
+
+    info_lines = _collect_tginfo()
+    if info_lines:
+        lines.append("")
+        lines.append("<b>🧭 Ход процесса (аккаунты, маршрут, подписанты):</b>")
+        for il in info_lines:
+            lines.append(escape(il))
 
     current = ""
     for line in lines:

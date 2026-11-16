@@ -452,6 +452,12 @@ def route_only_margulan(driver) -> bool:
         return False
     if not is_margulan_name(sec_txt):
         return False
+    try:
+        _names = route_names(driver)
+        if not _names or any(not is_margulan_name(n) for n in _names):
+            return False
+    except Exception:
+        pass
     low = sec_txt.lower()
     if "выбрать согласующего" in low or "этапы согласования не настроены" in low:
         return False
@@ -720,6 +726,7 @@ def _find_unset_route_trigger(driver, scope=None):
 def _fill_route_pass(driver, log=None) -> None:
     """Один проход очистки шаблона, добавления этапа и назначения Sh Margulan Ju."""
     clear_route_templates(driver, log=log)
+    purge_foreign_route(driver, log=log)
     if route_only_margulan(driver):
         return
 
@@ -812,6 +819,8 @@ def _fill_route_pass(driver, log=None) -> None:
             break
         time.sleep(0.8)
 
+    purge_foreign_route(driver, log=log)
+
     # Сохраняем модалку маршрута или встроенную кнопку «Сохранить», если она есть
     modal_after = find_approvers_modal(driver)
     if modal_after is not None:
@@ -867,7 +876,7 @@ def setup_margulan_route(driver, log=None) -> bool:
             _fill_route_pass(driver, log=log)
 
             sec = find_route_section(driver)
-            confirmed = route_only_margulan(driver) or (sec is not None and is_margulan_name(_safe_attr(sec, "innerText")))
+            confirmed = route_only_margulan(driver)
 
             # Если маршрут оставался в режиме чтения (например, есть кнопка «Сменить маршрут» в карточке Заявки)
             if not confirmed:
@@ -892,7 +901,7 @@ def setup_margulan_route(driver, log=None) -> bool:
 
             for _ in range(8):
                 sec = find_route_section(driver)
-                if route_only_margulan(driver) or (sec is not None and is_margulan_name(_safe_attr(sec, "innerText"))):
+                if route_only_margulan(driver):
                     if log:
                         log("  ✓ Маршрут согласования настроен (Sh Margulan Ju)", "PASS")
                     return True
@@ -917,3 +926,214 @@ def setup_margulan_route(driver, log=None) -> bool:
         log(f"  ⚠ Sh Margulan Ju не подтверждён в маршруте согласования ({sec_dump})", "WARN")
     return False
 
+
+
+
+# ==========================================================
+# Диагностика и принудительная очистка маршрута согласования
+# ==========================================================
+def tg_info(text: str):
+    """Строка для блока «Ход процесса» в детальном отчёте Telegram (и в обычный лог)."""
+    print("TGINFO| " + str(text), flush=True)
+
+
+def _row_name(r) -> str:
+    try:
+        cells = r.find_elements(By.CSS_SELECTOR, ".evd-route__td--name")
+        if cells:
+            return " ".join((cells[0].get_attribute("textContent") or "").split())
+        vals = r.find_elements(By.CSS_SELECTOR, ".ui-select__value")
+        if vals:
+            return " ".join((vals[0].get_attribute("textContent") or "").split())
+        tds = r.find_elements(By.TAG_NAME, "td")
+        if len(tds) >= 2:
+            return " ".join((tds[1].get_attribute("textContent") or "").split())
+    except Exception:
+        pass
+    return ""
+
+
+def _route_rows(driver):
+    sec = find_route_section(driver)
+    if sec is None:
+        return []
+    try:
+        return [r for r in sec.find_elements(By.XPATH, ".//tbody//tr") if r.is_displayed()]
+    except Exception:
+        return []
+
+
+def route_names(driver) -> list:
+    """Имена согласующих в маршруте (без пустых и плейсхолдеров)."""
+    out = []
+    for r in _route_rows(driver):
+        n = _row_name(r)
+        low = n.lower()
+        if not n or "выбрать" in low or low in _IGNORED_CELL_WORDS:
+            continue
+        out.append(n)
+    return out
+
+
+def route_summary(driver) -> str:
+    """Читаемая сводка: «1 этап: A, B | 2 этап: C»."""
+    sec = find_route_section(driver)
+    if sec is None:
+        return "блок маршрута не найден"
+    parts = []
+    try:
+        stages = [s for s in sec.find_elements(By.CSS_SELECTOR, ".evd-route__stage") if s.is_displayed()]
+    except Exception:
+        stages = []
+    for i, st in enumerate(stages, 1):
+        names = []
+        try:
+            for r in st.find_elements(By.XPATH, ".//tbody//tr"):
+                n = _row_name(r)
+                if n and "выбрать" not in n.lower():
+                    names.append(n)
+        except Exception:
+            pass
+        parts.append(f"{i} этап: " + (", ".join(names) if names else "пусто"))
+    if not parts:
+        names = route_names(driver)
+        parts.append(", ".join(names) if names else "пусто")
+    return " | ".join(parts)
+
+
+def signers_summary(driver) -> str:
+    """Подписанты из карточки: «Заказчик: X; Контрагент: Y» (порядок как на странице)."""
+    try:
+        txt = driver.execute_script(r"""
+            var s = document.querySelector("section.signers-card");
+            if (!s) return "";
+            return (s.innerText || "").replace(/\s+/g, " ").trim();
+        """) or ""
+    except Exception:
+        txt = ""
+    return txt[:300] if txt else "блок подписантов не найден"
+
+
+def current_user_name(driver) -> str:
+    """Имя пользователя, под которым сейчас открыт портал (рядом с кнопкой «Выйти»)."""
+    try:
+        return driver.execute_script(r"""
+            var els = Array.from(document.querySelectorAll('button,a,span,div'))
+              .filter(function(e){ return (e.innerText||'').trim() === 'Выйти' && e.offsetWidth; });
+            if (!els.length) return "";
+            var p = els[0].parentElement;
+            for (var i = 0; p && i < 4; i++, p = p.parentElement) {
+                var t = (p.innerText || '').replace('Выйти','').replace(/\s+/g,' ').trim();
+                var parts = t.split(/RU\s*KK\s*EN|Уведомления\s*\d*\+?/i);
+                var last = parts[parts.length-1].trim();
+                if (last && last.length < 60) return last;
+            }
+            return "";
+        """) or ""
+    except Exception:
+        return ""
+
+
+def purge_foreign_route(driver, log=None) -> int:
+    """Удаляет из маршрута всех согласующих кроме Sh Margulan Ju и лишние этапы.
+    Каждое удаление проверяется: число «чужих» строк должно уменьшиться."""
+    def foreign():
+        res = []
+        for r in _route_rows(driver):
+            n = _row_name(r)
+            if n and "выбрать" not in n.lower() and not is_margulan_name(n) and _has_other_person_text(n):
+                res.append(r)
+        return res
+
+    removed = 0
+    for _ in range(14):
+        fr = foreign()
+        if not fr:
+            break
+        before = len(fr)
+        row = fr[0]
+        who = _row_name(row)
+        try:
+            btns = [b for b in row.find_elements(By.XPATH, ".//button")
+                    if b.is_displayed() and b.is_enabled()
+                    and "ui-select__trigger" not in (b.get_attribute("class") or "")]
+        except Exception:
+            btns = []
+
+        def rank(b):
+            meta = " ".join([b.get_attribute("aria-label") or "", b.get_attribute("title") or "",
+                             b.get_attribute("class") or "", b.get_attribute("textContent") or ""]).lower()
+            if any(k in meta for k in ("удал", "убрать", "delete", "remove", "trash", "close", "cross")):
+                return 0
+            if not (b.get_attribute("textContent") or "").strip():
+                return 1
+            return 2
+        btns.sort(key=rank)
+
+        done = False
+        for b in btns[:4]:
+            try:
+                _click(driver, b)
+                time.sleep(0.5)
+                _confirm_delete_dialog_if_any(driver)
+                for xp in ["//*[@role='menuitem' or self::button or self::li]"
+                           "[contains(translate(normalize-space(.),'УДАЛИТЬ','удалить'),'удалить')]"]:
+                    items = [x for x in driver.find_elements(By.XPATH, xp)
+                             if x.is_displayed() and len((x.get_attribute("textContent") or "").strip()) < 30]
+                    if items:
+                        _click(driver, items[-1])
+                        _confirm_delete_dialog_if_any(driver)
+                        break
+                time.sleep(0.8)
+                if len(foreign()) < before:
+                    done = True
+                    break
+                try:
+                    ActionChains(driver).send_keys(Keys.ESCAPE).perform()
+                except Exception:
+                    pass
+            except Exception:
+                continue
+        if done:
+            removed += 1
+            if log:
+                log(f"  • Убран лишний согласующий из маршрута: {who[:60]}")
+            continue
+        if log:
+            try:
+                html = (row.get_attribute("outerHTML") or "")[:1500]
+            except Exception:
+                html = "?"
+            log(f"  ⚠ Не удалось убрать «{who[:60]}» из маршрута. HTML строки: {html}", "WARN")
+        break
+
+    # лишние этапы без Sh Margulan Ju (в т.ч. пустой первый этап), если этапов больше одного
+    for _ in range(5):
+        sec = find_route_section(driver)
+        if sec is None:
+            break
+        try:
+            stages = [s for s in sec.find_elements(By.CSS_SELECTOR, ".evd-route__stage") if s.is_displayed()]
+        except Exception:
+            break
+        if len(stages) <= 1:
+            break
+        acted = False
+        for stg in stages:
+            if is_margulan_name(stg.get_attribute("innerText") or ""):
+                continue
+            for sb in stg.find_elements(By.XPATH, ".//button"):
+                meta = " ".join([sb.get_attribute("aria-label") or "", sb.get_attribute("title") or "",
+                                 sb.get_attribute("class") or "", sb.get_attribute("textContent") or ""]).lower()
+                if sb.is_displayed() and sb.is_enabled() and any(k in meta for k in ("удал", "delete", "remove", "trash")):
+                    _click(driver, sb)
+                    _confirm_delete_dialog_if_any(driver)
+                    time.sleep(0.8)
+                    removed += 1
+                    acted = True
+                    break
+            if acted:
+                break
+        if not acted:
+            break
+    return removed
