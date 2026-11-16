@@ -193,16 +193,36 @@ def find_approvers_modal(driver):
 
 
 def _confirm_delete_dialog_if_any(driver):
-    time.sleep(0.35)
-    for xp in [
-        "//div[@role='dialog' or @aria-modal='true']//button[normalize-space(.)='Удалить' or normalize-space(.)='Да' or normalize-space(.)='Подтвердить']",
-        "//div[contains(@class,'modal')]//button[normalize-space(.)='Удалить' or normalize-space(.)='Да' or normalize-space(.)='Подтвердить']",
-    ]:
+    """Подтверждает диалог удаления («Удалить из маршрута?»).
+    ВАЖНО: раньше диалог не подтверждался, если его текст содержал слово «маршрут»
+    (его принимали за окно согласующих) — из-за этого удаление молча не срабатывало."""
+    time.sleep(0.5)
+    try:
+        dialogs = [d for d in driver.find_elements(
+            By.XPATH, "//*[@role='dialog' or @aria-modal='true' or contains(@class,'modal')]")
+            if d.is_displayed()]
+    except Exception:
+        dialogs = []
+    for d in reversed(dialogs):
         try:
-            btns = [b for b in driver.find_elements(By.XPATH, xp) if b.is_displayed() and b.is_enabled()]
-            if btns and not find_approvers_modal(driver):
-                _click(driver, btns[-1])
-                time.sleep(0.5)
+            txt = (d.get_attribute("innerText") or "").lower()
+            if "удал" not in txt and "убрать" not in txt:
+                continue
+            btns = [b for b in d.find_elements(By.XPATH, ".//button")
+                    if b.is_displayed() and b.is_enabled()]
+            pick = None
+            for b in btns:
+                bt = (b.get_attribute("textContent") or "").strip().lower()
+                if bt in ("удалить", "да", "подтвердить", "удалить из маршрута", "убрать", "ок"):
+                    pick = b
+            if pick is None:
+                for b in btns:
+                    bt = (b.get_attribute("textContent") or "").strip().lower()
+                    if "удал" in bt and "отмен" not in bt:
+                        pick = b
+            if pick is not None:
+                _click(driver, pick)
+                time.sleep(0.8)
                 return True
         except Exception:
             continue
@@ -250,6 +270,45 @@ def clear_approvers_modal_templates(driver, modal=None, log=None) -> int:
         if not acted:
             break
     return removed
+
+
+
+def _find_delete_menu_item(driver):
+    """Ищет видимый пункт выпадающего меню «Удалить из маршрута» / «Удалить» / «Убрать»
+    независимо от тега (div, span, a, li, button, role=menuitem)."""
+    try:
+        el = driver.execute_script(r"""
+            function vis(e) { return !!(e && (e.offsetWidth || e.offsetHeight || e.getClientRects().length)); }
+            var bad = /паспорт|заявк|заказ|документ|договор|смет/;
+            var cands = [];
+            var all = document.querySelectorAll("button, a, li, div, span, [role='menuitem'], [role='option']");
+            for (var i = 0; i < all.length; i++) {
+                var e = all[i];
+                if (!vis(e)) continue;
+                var txt = (e.innerText || e.textContent || "").replace(/\s+/g, " ").trim();
+                if (!txt || txt.length > 35) continue;
+                var low = txt.toLowerCase();
+                if (bad.test(low)) continue;
+                if (low.indexOf("удалить из маршрута") !== -1 || low === "удалить" || low === "убрать") {
+                    // берём самый вложенный элемент (без дочерних элементов с тем же текстом)
+                    var hasChildSame = false;
+                    for (var j = 0; j < e.children.length; j++) {
+                        var ct = (e.children[j].innerText || "").replace(/\s+/g, " ").trim().toLowerCase();
+                        if (ct === low) { hasChildSame = true; break; }
+                    }
+                    if (!hasChildSame) {
+                        var rect = e.getBoundingClientRect();
+                        cands.push({el: e, prio: low.indexOf("удалить из маршрута") !== -1 ? 0 : 1, area: rect.width * rect.height});
+                    }
+                }
+            }
+            if (!cands.length) return null;
+            cands.sort(function(a, b) { return a.prio - b.prio || a.area - b.area; });
+            return cands[cands.length - 1].el;
+        """)
+        return el
+    except Exception:
+        return None
 
 
 def clear_route_templates(driver, log=None) -> int:
@@ -320,26 +379,8 @@ def clear_route_templates(driver, log=None) -> int:
                 _click(driver, menu_btn)
                 time.sleep(0.5)
 
-                del_opt = None
+                del_opt = _find_delete_menu_item(driver)
                 edit_opt = None
-                for xp in [
-                    "//*[@role='menuitem' or @role='option' or self::button or self::li]"
-                    "[contains(translate(normalize-space(.),'УДАЛИТЬБР','удалитьбр'),'удал') "
-                    "or contains(translate(normalize-space(.),'УДАЛИТЬБР','удалитьбр'),'убрать')]",
-                ]:
-                    vis = [
-                        x for x in driver.find_elements(By.XPATH, xp)
-                        if x.is_displayed()
-                        and len((x.get_attribute("textContent") or "").strip()) < 40
-                        and "паспорт" not in (x.get_attribute("textContent") or "").lower()
-                        and "заявк" not in (x.get_attribute("textContent") or "").lower()
-                        and "заказ" not in (x.get_attribute("textContent") or "").lower()
-                        and "документ" not in (x.get_attribute("textContent") or "").lower()
-                        and "смет" not in (x.get_attribute("textContent") or "").lower()
-                    ]
-                    if vis:
-                        del_opt = vis[-1]
-                        break
 
                 if del_opt is not None:
                     if log:
@@ -471,7 +512,13 @@ def route_only_margulan(driver) -> bool:
                     return False
         stages = [s for s in sec.find_elements(By.CSS_SELECTOR, ".evd-route__stage") if s.is_displayed()]
         for s in stages:
-            if not is_margulan_name(s.get_attribute("innerText") or ""):
+            _has_rows = False
+            for _r in s.find_elements(By.XPATH, ".//tbody//tr"):
+                _n = _row_name(_r)
+                if _n and "выбрать" not in _n.lower():
+                    _has_rows = True
+                    break
+            if _has_rows and not is_margulan_name(s.get_attribute("innerText") or ""):
                 return False
     except Exception:
         pass
@@ -1053,10 +1100,15 @@ def purge_foreign_route(driver, log=None) -> int:
         before = len(fr)
         row = fr[0]
         who = _row_name(row)
+        btns = []
         try:
             btns = [b for b in row.find_elements(By.XPATH, ".//button")
                     if b.is_displayed() and b.is_enabled()
                     and "ui-select__trigger" not in (b.get_attribute("class") or "")]
+            if not btns:
+                btns = [b for b in row.find_elements(
+                    By.XPATH, ".//td[last()]//*[self::button or @role='button' or self::a or self::span or self::div or self::svg]"
+                ) if b.is_displayed() and "ui-select__trigger" not in (b.get_attribute("class") or "")]
         except Exception:
             btns = []
 
@@ -1076,15 +1128,11 @@ def purge_foreign_route(driver, log=None) -> int:
                 _click(driver, b)
                 time.sleep(0.5)
                 _confirm_delete_dialog_if_any(driver)
-                for xp in ["//*[@role='menuitem' or self::button or self::li]"
-                           "[contains(translate(normalize-space(.),'УДАЛИТЬ','удалить'),'удалить')]"]:
-                    items = [x for x in driver.find_elements(By.XPATH, xp)
-                             if x.is_displayed() and len((x.get_attribute("textContent") or "").strip()) < 30]
-                    if items:
-                        _click(driver, items[-1])
-                        _confirm_delete_dialog_if_any(driver)
-                        break
-                time.sleep(0.8)
+                del_item = _find_delete_menu_item(driver)
+                if del_item is not None:
+                    _click(driver, del_item)
+                    _confirm_delete_dialog_if_any(driver)
+                time.sleep(0.9)
                 if len(foreign()) < before:
                     done = True
                     break
@@ -1099,12 +1147,14 @@ def purge_foreign_route(driver, log=None) -> int:
             if log:
                 log(f"  • Убран лишний согласующий из маршрута: {who[:60]}")
             continue
+        try:
+            html = (row.get_attribute("outerHTML") or "")[:1500]
+        except Exception:
+            html = "?"
+        msg = f"  ⚠ Не удалось убрать «{who[:60]}» из маршрута (кнопок={len(btns)}). HTML: {html[:300]}"
         if log:
-            try:
-                html = (row.get_attribute("outerHTML") or "")[:1500]
-            except Exception:
-                html = "?"
-            log(f"  ⚠ Не удалось убрать «{who[:60]}» из маршрута. HTML строки: {html}", "WARN")
+            log(msg, "WARN")
+        tg_info(msg)
         break
 
     # лишние этапы без Sh Margulan Ju (в т.ч. пустой первый этап), если этапов больше одного

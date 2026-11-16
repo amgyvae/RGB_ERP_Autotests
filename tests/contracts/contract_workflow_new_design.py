@@ -3500,7 +3500,7 @@ def upload_file_to_docs_tab(file_path, doc_type="signing", name_prefix="Doc", co
         return False
 
 
-def click_card_action(button_text):
+def click_card_action(button_text, timeout=0):
     # ЗАЩИТА: действия статуса (На согласование / Согласовать /
     # Подписать) необратимы — убеждаемся, что жмём их на НАШЕМ
     # договоре, а не на случайно открытом чужом.
@@ -3509,16 +3509,22 @@ def click_card_action(button_text):
         return False
 
     candidates = []
-    try:
-        btns = driver.find_elements(By.XPATH,
-            f"//button[.//span[normalize-space(text())='{button_text}']] | "
-            f"//button[normalize-space(text())='{button_text}'] | "
-            f"//button[contains(normalize-space(.),'{button_text}')]")
-        for b in btns:
-            if b.is_displayed() and b.is_enabled():
-                candidates.append(b)
-    except Exception:
-        pass
+    deadline = time.time() + max(0, float(timeout or 0))
+    while True:
+        candidates = []
+        try:
+            btns = driver.find_elements(By.XPATH,
+                f"//button[.//span[normalize-space(text())='{button_text}']] | "
+                f"//button[normalize-space(text())='{button_text}'] | "
+                f"//button[contains(normalize-space(.),'{button_text}')]")
+            for b in btns:
+                if b.is_displayed() and b.is_enabled():
+                    candidates.append(b)
+        except Exception:
+            pass
+        if candidates or time.time() >= deadline:
+            break
+        time.sleep(0.6)
 
     if not candidates:
         return False
@@ -4274,8 +4280,8 @@ def main():
         # --- ЭТАП 10: На согласование ---
         log("ЭТАП 9: 'На согласование'")
         sent_to_approval = False
-        for btn in ["Передать на согласование", "На согласование", "Отправить на согласование"]:
-            if click_card_action(btn):
+        for btn_idx, btn in enumerate(["Передать на согласование", "На согласование", "Отправить на согласование"]):
+            if click_card_action(btn, timeout=6 if btn_idx == 0 else 1):
                 time.sleep(4)
                 try:
                     driver.refresh()
@@ -4290,7 +4296,16 @@ def main():
                 sent_to_approval = True
                 break
         if not sent_to_approval:
-            log("  ⚠ Не удалось отправить на согласование", "WARN")
+            try:
+                vis_btns = [
+                    (b.text or "").strip().replace("\n", " ")
+                    for b in driver.find_elements(By.TAG_NAME, "button")
+                    if b.is_displayed() and (b.text or "").strip()
+                ][:15]
+            except Exception:
+                vis_btns = []
+            log(f"  ⚠ Не удалось отправить на согласование (кнопки: {vis_btns})", "WARN")
+            tg_info(f"⚠️ Кнопка «Передать на согласование» не найдена (статус «{get_current_status()}», кнопки: {vis_btns})")
 
         # --- ЭТАП 9.5: Согласовать (под Sh Margulan Ju) ---
         log("ЭТАП 9.5: 'Согласовать' под назначенным согласующим (Sh Margulan Ju)")
