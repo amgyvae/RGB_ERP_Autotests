@@ -3330,18 +3330,36 @@ def main():
             workflow_result["fail_reasons"]["Бумажное подписание (без ЭЦП)"] = (
                 "кнопка отправки не найдена в карточке накладной")
     else:
-        log("ЭТАП 9: Передача на подписание (подписание выполняют Ерлан Талгатович и Талгат Ерланович)")
+        log("ЭТАП 9: Отправка накладной ('Подписать и отправить' / 'На согласование')")
         go_to_details_tab()
         time.sleep(2)
-        # Если есть кнопка передачи на согласование/подписание без ЭЦП — нажимаем её
-        for btn in ["На согласование", "Передать на подписание", "Отправить на подписание"]:
+        sent = False
+        for btn in ["Подписать и отправить", "На согласование", "Передать на подписание", "Отправить"]:
             if click_card_action(btn):
-                time.sleep(4)
+                time.sleep(2)
+                st_after = get_current_status()
+                if st_after in ("На согласовании", "На подписании", "Отправлена поставщиком", "Подписан"):
+                    log(f"  • Статус сразу перешёл в '{st_after}'")
+                else:
+                    from ncalayer_headless import _try_click_ncalayer_method_in_browser
+                    _try_click_ncalayer_method_in_browser(driver, log)
+                    signed = sign_with_ncalayer(password=ERLAN_NCA_PASSWORD, p12_path=ERLAN_P12_PATH, appear_timeout=25)
+                    if signed:
+                        workflow_result["actions_done"].append("Отправка: ЭЦП OK")
+                time.sleep(5)
+                try:
+                    driver.refresh()
+                    time.sleep(3)
+                except Exception:
+                    pass
                 status = get_current_status()
                 log(f"  '{btn}' → статус: '{status}'", "PASS")
                 workflow_result["actions_done"].append(f"{btn} → {status}")
                 workflow_result["final_status"] = status
+                sent = True
                 break
+        if not sent:
+            log("  ⚠ Кнопка отправки ('Подписать и отправить'/'На согласование') не найдена", "WARN")
 
     # --- ЭТАП 10: Согласовать ---
     log("ЭТАП 10: 'Согласовать'")

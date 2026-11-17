@@ -132,10 +132,12 @@ def tg_send_group_module_status(title: str, total: int, passed: int, failures: l
     if not groups:
         return
     dur_str = f" · ⏱ {_format_duration_ru(duration_sec)}" if duration_sec > 0 else ""
+    doc_urls = _collect_document_urls(limit=1)
+    link_str = f" · <a href=\"{escape(doc_urls[0])}\">🔗 Открыть</a>" if doc_urls else ""
     if passed == total and total > 0 and not failures:
-        text = f"✅ <b>{escape(title)}</b> — успешно ({passed}/{total}){dur_str}"
+        text = f"✅ <b>{escape(title)}</b> — успешно ({passed}/{total}){dur_str}{link_str}"
     else:
-        text = f"🔥 <b>{escape(title)}</b> — {passed}/{total} успешно (❌ {len(failures)} ошибок){dur_str}"
+        text = f"🔥 <b>{escape(title)}</b> — {passed}/{total} успешно (❌ {len(failures)} ошибок){dur_str}{link_str}"
         if failures:
             err_items = []
             for item in failures[:2]:
@@ -600,6 +602,29 @@ def require_sheet_write(result, expected):
         raise RuntimeError(f'Google Sheets: записано {written} из {expected} строк')
 
 
+def _collect_document_urls(limit: int = 5):
+    """Извлекает прямые ссылки на созданные документы/карточки из консольного лога."""
+    try:
+        path = _LAST_CONSOLE_LOG
+        if not path or not Path(path).is_file():
+            return []
+        import re
+        urls = []
+        url_regex = re.compile(r'https://testportal\.rgbgroup\.kz/[^\s"\'<>]+')
+        for raw in Path(path).read_text(encoding="utf-8", errors="replace").splitlines():
+            if any(bad in raw for bad in ("openid-connect", "silent-check-sso", ".js", ".css", "/api/")):
+                continue
+            matches = url_regex.findall(raw)
+            for u in matches:
+                u = u.rstrip(".,;)")
+                if any(k in u for k in ("/documents/", "/schedules/", "/projects/", "/contacts/", "/tasks/", "/news/")):
+                    if u not in urls:
+                        urls.append(u)
+        return urls[:limit]
+    except Exception:
+        return []
+
+
 def _collect_tginfo(limit: int = 40):
     """Строки 'TGINFO| ...' из консольного лога последнего запущенного скрипта."""
     try:
@@ -655,6 +680,17 @@ def send_telegram_summary(script_name: str, findings: list, reasons: dict,
             meta_line,
             "",
         ]
+
+    # Добавляем прямые ссылки на созданные документы/карточки
+    doc_urls = _collect_document_urls()
+    if doc_urls:
+        if len(doc_urls) == 1:
+            lines.append(f"🔗 <b>Созданный документ:</b> <a href=\"{escape(doc_urls[0])}\">{escape(doc_urls[0])}</a>")
+        else:
+            lines.append("🔗 <b>Созданные документы:</b>")
+            for u in doc_urls:
+                lines.append(f"  • <a href=\"{escape(u)}\">{escape(u)}</a>")
+        lines.append("")
 
     if error:
         origin = classify_failure(error, "Ошибка запуска")

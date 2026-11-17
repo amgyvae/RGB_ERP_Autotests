@@ -246,9 +246,9 @@ jobs:
       RGB_ACCOUNT1_LOGIN: jyktmargyplay2@gmail.com
       RGB_ACCOUNT1_PASSWORD: '12341234'
       RGB_ACCOUNT1_PASSWORD_ALT: '12341234'
-      RGB_ACCOUNT2_LOGIN: ${{ secrets.RGB_ACCOUNT2_LOGIN || 'dias.aldazharov@bk.ru' }}
-      RGB_ACCOUNT2_PASSWORD: ${{ secrets.RGB_ACCOUNT2_PASSWORD || 'h7WxqKIR' }}
-      RGB_ACCOUNT3_LOGIN: ${{ secrets.RGB_ACCOUNT3_LOGIN || 'aldazarovdias@gmail.com' }}
+      RGB_ACCOUNT2_LOGIN: ${{ secrets.RGB_ACCOUNT2_LOGIN || 'hhuh8918@gmail.com' }}
+      RGB_ACCOUNT2_PASSWORD: ${{ secrets.RGB_ACCOUNT2_PASSWORD || '12341234' }}
+      RGB_ACCOUNT3_LOGIN: ${{ secrets.RGB_ACCOUNT3_LOGIN || 'marshar244@gmail.com' }}
       RGB_ACCOUNT3_PASSWORD: ${{ secrets.RGB_ACCOUNT3_PASSWORD || '12341234' }}
       NCA_KEY1_PASSWORD: ${{ secrets.NCA_KEY1_PASSWORD || 'Aa200616.' }}
       NCA_KEY2_PASSWORD: ${{ secrets.NCA_KEY2_PASSWORD || 'Aa1979' }}

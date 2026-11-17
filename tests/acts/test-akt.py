@@ -132,17 +132,25 @@ login_val = env("RGB_ACCOUNT1_LOGIN", "jyktmargyplay2@gmail.com")
 pass_val = env("RGB_ACCOUNT1_PASSWORD", env("RGB_ACCOUNT1_PASSWORD_ALT", "12341234"))
 
 # --- Подписанты: Заказчик = Талгат Ерланович, Контрагент = Ерлан Талгатович ---
-_raw_talgat_login = env("RGB_ACCOUNT2_LOGIN")
+_raw_talgat_login = str(env("RGB_ACCOUNT2_LOGIN") or "").strip()
 _raw_talgat_pass = env("RGB_ACCOUNT2_PASSWORD")
-TALGAT_LOGIN = _raw_talgat_login if (_raw_talgat_login and _raw_talgat_login != login_val) else "marshar244@gmail.com"
-TALGAT_PASS = _raw_talgat_pass if (_raw_talgat_login and _raw_talgat_login != login_val and _raw_talgat_pass) else "12341234"
+if not _raw_talgat_login or _raw_talgat_login == login_val or "dias" in _raw_talgat_login.lower() or "aldazharov" in _raw_talgat_login.lower():
+    TALGAT_LOGIN = "marshar244@gmail.com"
+    TALGAT_PASS = "12341234"
+else:
+    TALGAT_LOGIN = _raw_talgat_login
+    TALGAT_PASS = _raw_talgat_pass if _raw_talgat_pass else "12341234"
 TALGAT_NCA_PASSWORD = env("NCA_KEY2_PASSWORD", "Aa1979")
 TALGAT_P12_PATH = resolve_default_p12_path(2, env("NCA_KEY2_PATH"))
 
-_raw_contractor_login = env("RGB_CONTRACTOR_LOGIN", env("RGB_ACCOUNT3_LOGIN"))
+_raw_contractor_login = str(env("RGB_CONTRACTOR_LOGIN", env("RGB_ACCOUNT3_LOGIN")) or "").strip()
 _raw_contractor_pass = env("RGB_CONTRACTOR_PASSWORD", env("RGB_ACCOUNT3_PASSWORD"))
-CONTRACTOR_LOGIN = _raw_contractor_login if (_raw_contractor_login and _raw_contractor_login != login_val) else "hhuh8918@gmail.com"
-CONTRACTOR_PASS = _raw_contractor_pass if (_raw_contractor_login and _raw_contractor_login != login_val and _raw_contractor_pass) else "12341234"
+if not _raw_contractor_login or _raw_contractor_login == login_val or "dias" in _raw_contractor_login.lower() or "aldazharov" in _raw_contractor_login.lower():
+    CONTRACTOR_LOGIN = "hhuh8918@gmail.com"
+    CONTRACTOR_PASS = "12341234"
+else:
+    CONTRACTOR_LOGIN = _raw_contractor_login
+    CONTRACTOR_PASS = _raw_contractor_pass if _raw_contractor_pass else "12341234"
 CONTRACTOR_NCA_PASSWORD = env("NCA_KEY1_PASSWORD", "Aa200616.")
 MAIN_P12_PATH = resolve_default_p12_path(1, env("NCA_KEY1_PATH"))
 NCA_PASSWORD = CONTRACTOR_NCA_PASSWORD
@@ -2216,14 +2224,19 @@ def click_card_action(button_text):
         return False
 
     candidates = []
-    try:
-        btns = driver.find_elements(By.XPATH,
-            f"//button[.//span[normalize-space(text())='{button_text}']]")
-        for b in btns:
-            if b.is_displayed() and b.is_enabled():
-                candidates.append(b)
-    except Exception:
-        pass
+    for xp in [
+        f"//button[.//span[normalize-space(text())='{button_text}']]",
+        f"//button[contains(normalize-space(.),'{button_text}')]",
+        f"//*[self::button or @role='button'][contains(normalize-space(.),'{button_text}')]",
+    ]:
+        try:
+            for b in driver.find_elements(By.XPATH, xp):
+                if b.is_displayed() and b.is_enabled() and b not in candidates:
+                    candidates.append(b)
+        except Exception:
+            continue
+        if candidates:
+            break
 
     if not candidates:
         return False
@@ -3580,22 +3593,25 @@ def upload_paper_signed_scan():
 
 def choose_ncalayer_method():
     """Select NCALayer when the portal offers signing methods."""
+    try:
+        from ncalayer_headless import _try_click_ncalayer_method_in_browser
+        if _try_click_ncalayer_method_in_browser(driver, log):
+            return
+    except Exception:
+        pass
     xpath = "//*[@role='dialog'][.//*[contains(normalize-space(.),'Способ подписания')]]"
     try:
         dialogs = wait_ui(lambda _: visible_elements(By.XPATH, xpath), timeout=3)
     except TimeoutException:
         # Older portal versions open NCALayer directly.
         return
-    if len(dialogs) != 1:
-        raise RuntimeError('Неоднозначное окно способа подписания')
-    buttons = dialogs[0].find_elements(By.XPATH,
-        ".//*[self::button or @role='button'][contains(normalize-space(.),'NCALayer')]")
-    buttons = [b for b in buttons if b.is_displayed() and b.is_enabled()]
-    if len(buttons) != 1:
-        shot('ncalayer_method_not_found')
-        raise RuntimeError('В окне способа подписи не найдена однозначная кнопка NCALayer')
-    buttons[0].click()
-    log('  Выбран способ подписи NCALayer')
+    if dialogs:
+        buttons = dialogs[-1].find_elements(By.XPATH,
+            ".//*[self::button or @role='button'][contains(normalize-space(.),'NCALayer')]")
+        buttons = [b for b in buttons if b.is_displayed() and b.is_enabled()]
+        if buttons:
+            buttons[0].click()
+            log('  Выбран способ подписи NCALayer')
 
 
 def sign_act_with_ecp():
@@ -3614,7 +3630,7 @@ def sign_act_with_ecp():
         wait_card_ready()
         ensure_on_our_document("sign_act")
         go_to_details_tab()
-        for btn in ["Подписать и отправить", "Подписать контрагентом", "Подписать", "Подписать ЭЦП"]:
+        for btn in ["Подписать контрагентом", "Подписать", "Подписать и отправить", "Подтвердить подписание", "Подписать ЭЦП"]:
             if click_card_action(btn):
                 choose_ncalayer_method()
                 log(f"  Нажата '{btn}', жду NCALayer...")
@@ -3635,7 +3651,7 @@ def sign_act_with_ecp():
                 workflow_result["final_status"] = status
                 return ok
     workflow_result["fail_reasons"]["Подписание ЭЦП"] = (
-        "кнопка 'Подписать и отправить'/'Подписать'/'Подписать ЭЦП' не найдена в шапке")
+        "кнопка 'Подписать контрагентом'/'Подписать'/'Подписать ЭЦП' не найдена в шапке")
     log("  • Кнопка подписания в шапке не найдена", "WARN")
     shot("no_sign_button_act")
     return False
@@ -3667,7 +3683,7 @@ def sign_act_by_talgat(act_url):
     except Exception:
         tid = ""
     if tid and tid not in driver.current_url:
-        log(f"  ⚠ Под Бейсембаев Куанышом акт не открылся ({driver.current_url})", "WARN")
+        log(f"  ⚠ Под Талгатом Ерлановичем акт не открылся ({driver.current_url})", "WARN")
         shot("wrong_page_talgat")
         return False
 
@@ -3675,23 +3691,23 @@ def sign_act_by_talgat(act_url):
     shot("talgat_opened_act")
     log(f"  Статус акта: '{get_current_status()}'")
 
-    for btn in ["Подписать заказчиком", "Подписать", "Подтвердить подписание"]:
+    for btn in ["Подписать заказчиком", "Подписать", "Подтвердить подписание", "Подписать ЭЦП", "Подписать и отправить"]:
         if click_card_action(btn):
             choose_ncalayer_method()
             log(f"  Нажата '{btn}', жду NCALayer...")
             signed = sign_with_ncalayer(
                 password=TALGAT_NCA_PASSWORD, p12_path=TALGAT_P12_PATH)
             if signed:
-                workflow_result["actions_done"].append("Бейсембаев Куаныш: ЭЦП OK")
+                workflow_result["actions_done"].append("Талгат Ерланович: ЭЦП OK")
             if signed:
                 wait_status({'На подписании', 'Подписан'})
             status = get_current_status()
-            log(f"  Бейсембаев Куаныш: '{btn}' → '{status}'", "PASS" if signed else "WARN")
-            workflow_result["actions_done"].append(f"Бейсембаев Куаныш: {btn} → {status}")
+            log(f"  Талгат Ерланович: '{btn}' → '{status}'", "PASS" if signed else "WARN")
+            workflow_result["actions_done"].append(f"Талгат Ерланович: {btn} → {status}")
             workflow_result["final_status"] = status
             return signed
 
-    log("  ⚠ Кнопка подписания не найдена под Бейсембаев Куанышом", "WARN")
+    log("  ⚠ Кнопка подписания не найдена под Талгатом Ерлановичем", "WARN")
     shot("no_talgat_sign_btn")
     return False
 
