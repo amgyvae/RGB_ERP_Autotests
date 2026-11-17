@@ -426,10 +426,12 @@ def parse_gpr_results(output: str, task_map: dict):
 
 
 _LAST_CONSOLE_LOG = None
+_LAST_PAYLOAD_URL = None
 
 
 def run_and_collect(script_path: str, task_map: dict, result_format="standard", script_args=()):
-    global _LAST_CONSOLE_LOG
+    global _LAST_CONSOLE_LOG, _LAST_PAYLOAD_URL
+    _LAST_PAYLOAD_URL = None
     print(f"Запускаю {script_path} ...")
     script = Path(script_path).resolve()
     console_log = LOGS_DIR / f"{script.stem}_console_{datetime.now():%Y%m%d_%H%M%S}_{uuid.uuid4().hex[:8]}.txt"
@@ -603,20 +605,42 @@ def require_sheet_write(result, expected):
 
 
 def _collect_document_urls(limit: int = 5):
-    """Извлекает прямые ссылки на созданные документы/карточки из консольного лога."""
+    """Извлекает прямые ссылки на созданные документы/карточки из payload и консольного лога."""
     try:
+        urls = []
+        global _LAST_PAYLOAD_URL
+        if _LAST_PAYLOAD_URL and isinstance(_LAST_PAYLOAD_URL, str) and _LAST_PAYLOAD_URL.startswith("http"):
+            clean_u = _LAST_PAYLOAD_URL.split("#")[0].replace("/edit", "").rstrip("/")
+            if clean_u not in urls:
+                urls.append(clean_u)
+
         path = _LAST_CONSOLE_LOG
         if not path or not Path(path).is_file():
-            return []
+            return urls[:limit]
+
         import re
-        urls = []
-        url_regex = re.compile(r'https://testportal\.rgbgroup\.kz/[^\s"\'<>]+')
-        for raw in Path(path).read_text(encoding="utf-8", errors="replace").splitlines():
+        url_regex = re.compile(r'https://testportal\.rgbgroup\.kz/[^\s"\'<>()]+')
+        lines = Path(path).read_text(encoding="utf-8", errors="replace").splitlines()
+
+        created_lines = []
+        other_lines = []
+        for raw in lines:
             if any(bad in raw for bad in ("openid-connect", "silent-check-sso", ".js", ".css", "/api/")):
                 continue
+            r_lower = raw.lower()
+            if any(kw in r_lower for kw in (
+                "сохранён", "сохранена", "сохранено", "сохранен",
+                "создан", "создана", "создано", "созданный", "созданная",
+                "создан: http", "карточка:", "паспорт сохранён", "заявка создана", "гфр создан"
+            )):
+                created_lines.append(raw)
+            else:
+                other_lines.append(raw)
+
+        for raw in created_lines + other_lines:
             matches = url_regex.findall(raw)
             for u in matches:
-                u = u.rstrip(".,;)")
+                u = u.rstrip(".,;:)'\"]").replace("/edit", "").rstrip("/")
                 clean_path = u.split("?")[0].rstrip("/")
                 if clean_path.endswith((
                     "/documents/waybills",
@@ -629,11 +653,44 @@ def _collect_document_urls(limit: int = 5):
                     "/schedules",
                     "/contacts",
                     "/projects",
+                    "/projects/create",
                     "/tasks",
                     "/news",
+                    "/wiki",
+                    "/discussions",
+                    "/supply",
+                    "/supply/stock",
+                    "/supply/equipment",
+                    "/estimates",
+                    "/estimates/versions",
+                    "/finance",
+                    "/finance/cashflow",
+                    "/finance/gfr",
+                    "/financing-schedules",
+                    "/financing-schedules/versions",
+                    "/quality",
+                    "/quality/issue-registration",
+                    "/quality/biot",
+                    "/quality/inspection",
+                    "/panelrukovoditelya",
+                    "/dashboard",
                 )):
                     continue
-                if any(k in u for k in ("/documents/", "/schedules/", "/projects/", "/contacts/", "/tasks/", "/news/")):
+                if any(k in u for k in (
+                    "/documents/",
+                    "/projects/",
+                    "/schedules/",
+                    "/financing-schedules/",
+                    "/finance/",
+                    "/estimates/",
+                    "/supply/",
+                    "/quality/",
+                    "/discussions/",
+                    "/wiki/",
+                    "/news/",
+                    "/contacts/",
+                    "/tasks/",
+                )):
                     if u not in urls:
                         urls.append(u)
         return urls[:limit]
@@ -844,6 +901,17 @@ def contacts_summary(results, script_path=None, duration_sec: float = 0.0):
             "",
         ]
 
+    # Добавляем прямые ссылки на созданные документы/карточки
+    doc_urls = _collect_document_urls()
+    if doc_urls:
+        if len(doc_urls) == 1:
+            lines.append(f"🔗 <b>Созданный документ:</b> <a href=\"{escape(doc_urls[0])}\">{escape(doc_urls[0])}</a>")
+        else:
+            lines.append("🔗 <b>Созданные документы:</b>")
+            for u in doc_urls:
+                lines.append(f"  • <a href=\"{escape(u)}\">{escape(u)}</a>")
+        lines.append("")
+
     lines.append("<b>Этапы сценария:</b>")
     for idx, r in enumerate(results, 1):
         name = escape(checks[r['id'] - 1]['name'])
@@ -913,11 +981,14 @@ def contacts_stream(command, cwd, env, log_path, timeout=1800):
 
 
 def run_contacts(script_path, args, report_results, tg_send, tg_photo):
+    global _LAST_CONSOLE_LOG, _LAST_PAYLOAD_URL
+    _LAST_PAYLOAD_URL = None
     started_ts = time.monotonic()
     run_id = uuid.uuid4().hex
     env = dict(os.environ, CONTACTS_RUN_ID=run_id, PYTHONIOENCODING='utf-8')
     script_path = Path(script_path).resolve()
     log_path = LOGS_DIR / f'contacts_log_{datetime.now():%Y%m%d_%H%M%S}_{run_id[:8]}.txt'
+    _LAST_CONSOLE_LOG = log_path
     try:
         completed = contacts_stream([sys.executable, '-u', str(script_path), *args], ROOT_DIR, env, log_path)
         output = completed.stdout + '\n' + completed.stderr
@@ -1014,6 +1085,9 @@ def run_structured_workflow(script_path, args, module_key, checks_file, row_rang
     run_id = uuid.uuid4().hex
     result_path = LOGS_DIR / f'{script.stem}_results_{run_id}.json'
     log_path = LOGS_DIR / f'{script.stem}_console_{run_id}.txt'
+    global _LAST_CONSOLE_LOG, _LAST_PAYLOAD_URL
+    _LAST_CONSOLE_LOG = log_path
+    _LAST_PAYLOAD_URL = None
     pp_dirs = [str(ROOT_DIR), str(ROOT_DIR / 'core'), str(ROOT_DIR / 'config'), str(script.parent)]
     if os.environ.get('PYTHONPATH'):
         pp_dirs.append(os.environ['PYTHONPATH'])
@@ -1027,6 +1101,7 @@ def run_structured_workflow(script_path, args, module_key, checks_file, row_rang
         completed = contacts_stream([sys.executable, '-u', str(script), *args], ROOT_DIR, env,
                                     log_path, timeout=7200)
         payload = json.loads(result_path.read_text(encoding='utf-8'))
+        _LAST_PAYLOAD_URL = payload.get('url') or payload.get('created_news') or None
         rows, skipped = validate_workflow_results(payload, run_id, expected)
         run_error = payload.get('error', '')
         if completed.returncode not in (0, 1) or (completed.returncode == 1 and not run_error and all(r['ok'] for r in rows)):

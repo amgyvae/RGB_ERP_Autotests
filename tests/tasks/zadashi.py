@@ -3237,6 +3237,20 @@ def save_report():
             lines.append(f"⚠️ <b>Прерывание:</b> <i>{FATAL_ABORT_REASON[:200]}</i>")
         lines.append("")
 
+    try:
+        from run_workflow_and_report import _collect_document_urls
+        doc_urls = _collect_document_urls()
+        if doc_urls:
+            if len(doc_urls) == 1:
+                lines.append(f"🔗 <b>Созданный документ:</b> <a href=\"{escape(doc_urls[0])}\">{escape(doc_urls[0])}</a>")
+            else:
+                lines.append("🔗 <b>Созданные документы:</b>")
+                for u in doc_urls:
+                    lines.append(f"  • <a href=\"{escape(u)}\">{escape(u)}</a>")
+            lines.append("")
+    except Exception:
+        pass
+
     if checklist_results:
         lines.append("<b>Этапы сценария:</b>")
         idx = 1
