@@ -3599,7 +3599,7 @@ def click_card_action(button_text, timeout=0):
     return False
 
 
-def _wait_contract_card_loaded(timeout=12):
+def _wait_contract_card_loaded(timeout=25):
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
@@ -3612,6 +3612,17 @@ def _wait_contract_card_loaded(timeout=12):
             pass
         time.sleep(0.5)
     return False
+
+
+def _main_text_preview(limit=220):
+    try:
+        txt = driver.execute_script(
+            r"var m = document.querySelector('main') || document.body;"
+            r"return (m ? (m.innerText || '') : '').replace(/\s+/g, ' ').trim();"
+        ) or ""
+        return txt[:limit]
+    except Exception:
+        return ""
 
 
 def _main_area_buttons(limit=15):
@@ -3877,7 +3888,7 @@ def sign_by_account(account_login, account_pass, nca_password, contract_url,
 
     dismiss_chrome_password_popup()
     driver.get(contract_url)
-    _wait_contract_card_loaded(12)
+    _wait_contract_card_loaded(25)
     time.sleep(1)
 
     # Проверяем, что под этим аккаунтом открылся именно НАШ договор
@@ -4175,7 +4186,7 @@ def main():
     log(f"  URL карточки: {clean_url}", "PASS")
     tg_info(f"🔗 Создан договор: {clean_url}")
     driver.get(clean_url)
-    _wait_contract_card_loaded(12)
+    _wait_contract_card_loaded(25)
     time.sleep(1)
     dismiss_chrome_password_popup()
     go_to_general_info()
@@ -4240,7 +4251,7 @@ def main():
         if not _route_ok:
             workflow_result["approval_route"] = False
             if _rs == "блок маршрута не найден":
-                tg_info(f"🔍 URL сейчас: {driver.current_url} | кнопки на странице: {_main_area_buttons(12)}")
+                tg_info(f"🔍 URL сейчас: {driver.current_url} | кнопки: {_main_area_buttons(12)} | текст: «{_main_text_preview()}»")
     except Exception as _e:
         log(f"  ⚠ Не удалось прочитать маршрут: {_e}", "WARN")
 
@@ -4336,7 +4347,7 @@ def main():
         if not sent_to_approval:
             vis_btns = _main_area_buttons(15)
             log(f"  ⚠ Не удалось отправить на согласование (URL={driver.current_url}, кнопки: {vis_btns})", "WARN")
-            tg_info(f"⚠️ Кнопка «Передать на согласование» не найдена (статус «{get_current_status()}», URL: {driver.current_url}, кнопки: {vis_btns})")
+            tg_info(f"⚠️ Кнопка «Передать на согласование» не найдена (статус «{get_current_status()}», URL: {driver.current_url}, кнопки: {vis_btns}, текст: «{_main_text_preview()}»)")
 
         # --- ЭТАП 9.5: Согласовать (под Sh Margulan Ju) ---
         log("ЭТАП 9.5: 'Согласовать' под назначенным согласующим (Sh Margulan Ju)")

@@ -119,8 +119,8 @@ def _plural_stages(n: int) -> str:
 
 def _module_stem(key: str) -> str:
     _, cmd, _ = MODULES[key]
-    # Берём именно путь к .py-скрипту, а не последний аргумент (сценарий: default/all/avr)
-    script = next((c for c in cmd if str(c).lower().endswith(".py")), cmd[-1])
+    # Берём последний .py-аргумент (сам тестовый скрипт, а не обёртку run_workflow_and_report.py)
+    script = next((c for c in reversed(cmd) if str(c).lower().endswith(".py")), cmd[-1])
     return Path(script).stem.lower()
 
 

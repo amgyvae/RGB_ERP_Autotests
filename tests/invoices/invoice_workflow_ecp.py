@@ -2494,10 +2494,15 @@ def go_to_details_tab():
 def select_invoice_dropdown(label, allow_missing=False, target_option=None):
     """Заказчик → AI Group, Контрагент → ИП Алдажаров,
     Ставка НДС → 16%, остальные → первый доступный."""
+    target_tokens = []
     if "Заказчик" in label:
         target_option = "GI Group"
+        target_tokens = ["gi group", "rgb group", "gi_group"]
     elif "Контрагент" in label:
         target_option = "ШАРИПЖАН МАРГУЛАН"
+        target_tokens = ["шарипжан маргулан", "шарипжан", "маргулан"]
+    elif target_option:
+        target_tokens = [target_option]
 
     trigger = find_ui_kit_trigger_near_label(label)
     if not trigger:
@@ -2608,13 +2613,19 @@ def select_invoice_dropdown(label, allow_missing=False, target_option=None):
                 if "%" in t and "без" not in t:
                     picked = o
                     break
-    elif target_option:
-        for o in opts:
-            if target_option.lower() in o["text"].lower():
-                picked = o
+    elif target_tokens:
+        for tok in target_tokens:
+            for o in opts:
+                if tok.lower() in o["text"].lower():
+                    picked = o
+                    break
+            if picked:
                 break
-    if not picked and ("Контрагент" in label or "Заказчик" in label or (label == "Получатель" and target)):
-        raise RuntimeError(f'{label}: компания {target_option!r} не найдена')
+    if not picked and ("Контрагент" in label or "Заказчик" in label):
+        if allow_missing:
+            _close_any_ui_select_panel()
+            return None
+        raise RuntimeError(f'{label}: компания {target_tokens!r} не найдена среди {[o["text"] for o in opts[:8]]}')
     if not picked:
         picked = opts[0]
 
@@ -2852,7 +2863,10 @@ def create_invoice_via_modal():
                     picked = o
                     break
         if not picked and ("Контрагент" in label or "Заказчик" in label or (label == "Получатель" and target)):
-            raise RuntimeError(f'{label}: компания {target!r} не найдена')
+            if not required:
+                _close_any_ui_select_panel()
+                return False
+            raise RuntimeError(f'{label}: компания {target!r} не найдена среди {[o["text"] for o in options[:8]]}')
         if not picked:
             picked = options[0]
 
@@ -3839,6 +3853,10 @@ for _run_idx, _run_key in enumerate(_scenarios_to_run, 1):
             shot(f"critical_error_{_run_key}")
         except Exception:
             pass
+        _safe_out(f"Тип оплаты: {_run_key}: ✗")
+        _safe_out("Создана: ✗")
+        _safe_out(f"[ПРИЧИНА] Создание документа: {str(e)[:200]}")
+        _safe_out(f"[ПРИЧИНА] Тип оплаты: {_run_key}: {str(e)[:200]}")
 
 _safe_out("")
 _safe_out("=" * 60)

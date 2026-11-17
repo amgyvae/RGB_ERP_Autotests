@@ -3514,7 +3514,7 @@ def fill_signatories_in_card():
         section = driver.find_element(By.CSS_SELECTOR, 'section.signers-card')
         text = section.text.lower()
         save_buttons = section.find_elements(By.XPATH, ".//button[normalize-space(.)='Сохранить']")
-        return 'бейсембаев' in text and any(k in text for k in ('алд', 'ерлан', 'талгат')) and not any(b.is_displayed() for b in save_buttons)
+        return ('талгат' in text or 'ерланович' in text) and ('ерлан' in text or 'талгатович' in text) and not any(b.is_displayed() for b in save_buttons)
     try:
         saved = bool(save_btn) and WebDriverWait(driver, WAIT).until(saved_signers)
     except Exception:
