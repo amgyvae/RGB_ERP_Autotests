@@ -208,6 +208,9 @@ def _confirm_delete_dialog_if_any(driver):
             txt = (d.get_attribute("innerText") or "").lower()
             if "удал" not in txt and "убрать" not in txt:
                 continue
+            # Защита: ни в коем случае не подтверждаем удаление самого документа/договора!
+            if any(bad in txt for bad in ["договор", "документ", "накладн", "заявк", "паспорт"]):
+                continue
             btns = [b for b in d.find_elements(By.XPATH, ".//button")
                     if b.is_displayed() and b.is_enabled()]
             pick = None
@@ -274,23 +277,23 @@ def clear_approvers_modal_templates(driver, modal=None, log=None) -> int:
 
 
 def _find_delete_menu_item(driver):
-    """Ищет видимый пункт выпадающего меню «Удалить из маршрута» / «Удалить» / «Убрать»
-    независимо от тега (div, span, a, li, button, role=menuitem)."""
+    """Ищет видимый пункт выпадающего меню «Удалить из маршрута».
+    СТРОГО: только пункт с текстом «удалить из маршрута» (чтобы случайно не задеть
+    кнопки удаления/отмены самого документа на странице)."""
     try:
         el = driver.execute_script(r"""
             function vis(e) { return !!(e && (e.offsetWidth || e.offsetHeight || e.getClientRects().length)); }
-            var bad = /паспорт|заявк|заказ|документ|договор|смет/;
+            var bad = /паспорт|заявк|заказ|документ|договор|смет|накладн|акт/;
             var cands = [];
             var all = document.querySelectorAll("button, a, li, div, span, [role='menuitem'], [role='option']");
             for (var i = 0; i < all.length; i++) {
                 var e = all[i];
                 if (!vis(e)) continue;
                 var txt = (e.innerText || e.textContent || "").replace(/\s+/g, " ").trim();
-                if (!txt || txt.length > 35) continue;
+                if (!txt || txt.length > 40) continue;
                 var low = txt.toLowerCase();
                 if (bad.test(low)) continue;
-                if (low.indexOf("удалить из маршрута") !== -1 || low === "удалить" || low === "убрать") {
-                    // берём самый вложенный элемент (без дочерних элементов с тем же текстом)
+                if (low.indexOf("удалить из маршрута") !== -1 || (low === "удалить" && e.closest && e.closest("[role='menu'], [role='menuitem'], ul, .menu, .dropdown-menu, .ant-dropdown-menu, .ui-menu"))) {
                     var hasChildSame = false;
                     for (var j = 0; j < e.children.length; j++) {
                         var ct = (e.children[j].innerText || "").replace(/\s+/g, " ").trim().toLowerCase();
@@ -298,13 +301,18 @@ def _find_delete_menu_item(driver):
                     }
                     if (!hasChildSame) {
                         var rect = e.getBoundingClientRect();
-                        cands.push({el: e, prio: low.indexOf("удалить из маршрута") !== -1 ? 0 : 1, area: rect.width * rect.height});
+                        cands.push({
+                            el: e,
+                            prio: low.indexOf("удалить из маршрута") !== -1 ? 0 : 1,
+                            area: rect.width * rect.height
+                        });
                     }
                 }
             }
             if (!cands.length) return null;
+            // Сортируем: сначала prio 0 ("удалить из маршрута"), затем наименьшая площадь (самый компактный пункт меню)
             cands.sort(function(a, b) { return a.prio - b.prio || a.area - b.area; });
-            return cands[cands.length - 1].el;
+            return cands[0].el;
         """)
         return el
     except Exception:

@@ -2983,7 +2983,7 @@ def fill_signatories_in_card():
 
 def sign_waybill_by_talgat(waybill_url):
     log("=" * 60)
-    log("Второй подписант подписывает накладную (ЭЦП)")
+    log("Подписание накладной обоими подписантами (ЭЦП)")
     log("=" * 60)
 
     if not waybill_url:
@@ -2991,9 +2991,10 @@ def sign_waybill_by_talgat(waybill_url):
         return False
 
     any_signed = False
+    # Строгий порядок: 1-й — Поставщик/Контрагент (Ерлан Талгатович), 2-й — Заказчик (Талгат Ерланович)
     for acc_label, acc_login, acc_pass, acc_nca_pwd, acc_p12 in [
-        ("Заказчик (Талгат Ерланович)", TALGAT_LOGIN, TALGAT_PASS, TALGAT_NCA_PASSWORD, TALGAT_P12_PATH),
         ("Контрагент (Ерлан Талгатович)", ERLAN_LOGIN, ERLAN_PASS, ERLAN_NCA_PASSWORD, ERLAN_P12_PATH),
+        ("Заказчик (Талгат Ерланович)", TALGAT_LOGIN, TALGAT_PASS, TALGAT_NCA_PASSWORD, TALGAT_P12_PATH),
     ]:
         if not logout_current_account():
             driver.get(BASE_URL)
@@ -3302,56 +3303,45 @@ def main():
         time.sleep(3)
     time.sleep(2)
 
-    # --- ЭТАП 9: Отправить / Подписать и отправить (основной + ЭЦП/бумага) ---
+    # --- ЭТАП 9: Отправить / Подписание ---
     if PAPER_MODE:
         log("ЭТАП 9: 'Отправить' (бумажное подписание — NCALayer НЕ используется)")
-    else:
-        log("ЭТАП 9: 'Отправить' + NCALayer (основной аккаунт)")
-    go_to_details_tab()
-    time.sleep(2)
-    for btn in ["На согласование", "Подписать и отправить", "Подписать", "Отправить"]:
-        if click_card_action(btn):
-            if PAPER_MODE:
-                # В режиме бумажного подписания ЭЦП не нужен — просто
-                # смотрим, что происходит после клика по кнопке.
+        go_to_details_tab()
+        time.sleep(2)
+        for btn in ["На согласование", "Подписать и отправить", "Подписать", "Отправить"]:
+            if click_card_action(btn):
                 time.sleep(3)
                 shot("paper_mode_after_send")
-            else:
-                time.sleep(2)
-                st_after_click = get_current_status()
-                if st_after_click in ("На согласовании", "На подписании", "Подписан", "Подписано"):
-                    log(f"  • Статус сразу перешёл в '{st_after_click}' (ЭЦП будет на этапе подписантов)")
-                else:
-                    signed = sign_with_ncalayer(password=NCA_PASSWORD, p12_path=MAIN_P12_PATH, appear_timeout=25)
-                    if signed:
-                        workflow_result["actions_done"].append("Основной: ЭЦП OK")
-                        workflow_result["ecp_signed"] = True
-                    else:
-                        workflow_result["fail_reasons"]["Подписание ЭЦП"] = (
-                            "sign_with_ncalayer() вернул неуспех — см. лог NCALayer выше "
-                            "(окно не появилось / пароль не введён / ИИН не совпал и т.п.)")
-            time.sleep(5)
-            try:
-                driver.refresh()
-                time.sleep(4)
-            except Exception:
-                pass
-            status = get_current_status()
-            log(f"  '{btn}' → статус: '{status}'", "PASS")
-            workflow_result["actions_done"].append(f"{btn} → {status}")
-            workflow_result["final_status"] = status
-            if PAPER_MODE:
-                # Успех сценария — документ реально продвинулся по
-                # статусу БЕЗ участия NCALayer.
+                try:
+                    driver.refresh()
+                    time.sleep(3)
+                except Exception:
+                    pass
+                status = get_current_status()
+                log(f"  '{btn}' → статус: '{status}'", "PASS")
+                workflow_result["actions_done"].append(f"{btn} → {status}")
+                workflow_result["final_status"] = status
                 workflow_result["ecp_signed"] = status is not None and status != "Черновик"
                 if not workflow_result["ecp_signed"]:
                     workflow_result["fail_reasons"]["Бумажное подписание (без ЭЦП)"] = (
                         f"после отправки статус остался '{status}' — документ не продвинулся")
-            break
+                break
+        else:
+            workflow_result["fail_reasons"]["Бумажное подписание (без ЭЦП)"] = (
+                "кнопка отправки не найдена в карточке накладной")
     else:
-        workflow_result["fail_reasons"][
-            "Бумажное подписание (без ЭЦП)" if PAPER_MODE else "Подписание ЭЦП"
-        ] = "кнопка 'Подписать и отправить'/'Подписать'/'Отправить' не найдена в шапке документа"
+        log("ЭТАП 9: Передача на подписание (подписание выполняют Ерлан Талгатович и Талгат Ерланович)")
+        go_to_details_tab()
+        time.sleep(2)
+        # Если есть кнопка передачи на согласование/подписание без ЭЦП — нажимаем её
+        for btn in ["На согласование", "Передать на подписание", "Отправить на подписание"]:
+            if click_card_action(btn):
+                time.sleep(4)
+                status = get_current_status()
+                log(f"  '{btn}' → статус: '{status}'", "PASS")
+                workflow_result["actions_done"].append(f"{btn} → {status}")
+                workflow_result["final_status"] = status
+                break
 
     # --- ЭТАП 10: Согласовать ---
     log("ЭТАП 10: 'Согласовать'")
@@ -3367,21 +3357,21 @@ def main():
             workflow_result["final_status"] = status
             break
 
-    # --- ЭТАП 11: Талгат подписывает (не применимо в режиме бумаги) ---
+    # --- ЭТАП 11: Подписание ЭЦП (Ерлан Талгатович и Талгат Ерланович) ---
     if PAPER_MODE:
-        log("ЭТАП 11: пропущен — при бумажном подписании ЭЦП второго подписанта не требуется")
+        log("ЭТАП 11: пропущен — при бумажном подписании ЭЦП не требуется")
     else:
         log("=" * 60)
-        log("ЭТАП 11: Талгат Ерланович подписывает накладную (заказчик)")
+        log("ЭТАП 11: Подписание накладной с ЭЦП (Ерлан Талгатович и Талгат Ерланович)")
         log("=" * 60)
         time.sleep(3)
         try:
             if sign_waybill_by_talgat(workflow_result["url"]):
-                log("  ✓✓ Талгат подписал", "PASS")
+                log("  ✓✓ Подписание успешно выполнено", "PASS")
             else:
-                log("  ⚠ Талгат не подписал", "WARN")
+                log("  ⚠ Подписание не выполнено", "WARN")
         except Exception as e:
-            log(f"  ⚠ Ошибка Талгата: {e}", "WARN")
+            log(f"  ⚠ Ошибка подписания: {e}", "WARN")
             try:
                 import traceback
                 for tb in traceback.format_exc().split("\n"):

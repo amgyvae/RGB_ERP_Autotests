@@ -2858,15 +2858,30 @@ def create_invoice_via_modal():
 
         picked = None
         if target:
+            target_list = target if isinstance(target, (list, tuple)) else [target]
+            # Сначала точное/подстрочное совпадение
             for o in options:
-                if target.lower() in o["text"].lower():
+                txt_low = o["text"].lower()
+                if any(t.lower() in txt_low for t in target_list):
                     picked = o
                     break
-        if not picked and ("Контрагент" in label or "Заказчик" in label or (label == "Получатель" and target)):
+
+        if label == "Наблюдатели":
+            # Снимаем выбор с Алдажарова, если он был отмечен по умолчанию
+            for o in options:
+                if "алдажаров" in o["text"].lower():
+                    try:
+                        _click_option_robustly(o["element"], o["text"], panel=panel)
+                        time.sleep(0.3)
+                    except Exception:
+                        pass
+                    break
+
+        if not picked and ("Контрагент" in label or "Заказчик" in label or label == "Получатель"):
             if not required:
                 _close_any_ui_select_panel()
                 return False
-            raise RuntimeError(f'{label}: компания {target!r} не найдена среди {[o["text"] for o in options[:8]]}')
+            raise RuntimeError(f'{label}: компания/сотрудник {target!r} не найдена среди {[o["text"] for o in options[:8]]}')
         if not picked:
             picked = options[0]
 
@@ -2882,14 +2897,12 @@ def create_invoice_via_modal():
     time.sleep(0.8)
     pick_in_modal("Заказчик", target="AI Group")
     time.sleep(0.3)
-    # ВАЖНО: поле "Получатель" — обязательное (со звёздочкой в форме),
-    # но раньше не заполнялось вообще, из-за чего кнопка "Создать"
-    # оставалась неактивной. Старые варианты "Выдать сотруднику"/
-    # "Контрагент" оставлены как запасные — похоже на устаревшие
-    # названия того же поля в предыдущей версии формы.
-    if not pick_in_modal("Получатель", target="ШАРИПЖАН МАРГУЛАН", required=False):
-        if not pick_in_modal("Выдать сотруднику", required=False):
-            pick_in_modal("Контрагент", target="ШАРИПЖАН МАРГУЛАН", required=False)
+    # ВАЖНО: поле "Получатель" — обязательное (со звёздочкой в форме).
+    # По требованию пользователя выбираем Талгата Ерлановича («Ерланович Талгат»).
+    if not pick_in_modal("Получатель", target=["Ерланович Талгат", "Талгат", "Ерланович"], required=False):
+        if not pick_in_modal("Получатель", target="ШАРИПЖАН МАРГУЛАН", required=False):
+            if not pick_in_modal("Выдать сотруднику", target=["Ерланович Талгат", "Талгат"], required=False):
+                pick_in_modal("Контрагент", target="ШАРИПЖАН МАРГУЛАН", required=False)
     time.sleep(0.3)
     pick_in_modal("Проект")
     time.sleep(0.3)
@@ -2897,8 +2910,20 @@ def create_invoice_via_modal():
     time.sleep(0.3)
     pick_in_modal("Блок", required=False)
     time.sleep(0.3)
-    pick_in_modal("Наблюдатели", required=False)
+    # Наблюдатели: выбираем Талгата Ерлановича (без привязки к Диасу Алдажарову)
+    pick_in_modal("Наблюдатели", target=["Ерланович Талгат", "Талгат", "Ерланович"], required=False)
     time.sleep(0.3)
+
+    # Дополнительно: если в модалке остался чип с Диасом Алдажаровым — убираем крестиком
+    try:
+        chips = modal.find_elements(
+            By.XPATH, ".//*[contains(text(),'Алдажаров')]/ancestor::*[contains(@class,'chip') or contains(@class,'tag') or contains(@class,'item')][1]//*[contains(text(),'×') or contains(text(),'x') or self::button or contains(@class,'close') or contains(@class,'remove')]")
+        for x_btn in chips:
+            if x_btn.is_displayed():
+                js_click(x_btn)
+                time.sleep(0.3)
+    except Exception:
+        pass
 
     blur_focus()
     time.sleep(0.6)
