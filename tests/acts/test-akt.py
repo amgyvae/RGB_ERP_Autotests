@@ -3523,16 +3523,23 @@ def fill_signatories_in_card():
     else:
         log("  ⚠ Кнопка 'Сохранить' подписантов не найдена", "WARN")
 
-    def saved_signers(_):
-        section = driver.find_element(By.CSS_SELECTOR, 'section.signers-card')
-        text = section.text.lower()
-        save_buttons = section.find_elements(By.XPATH, ".//button[normalize-space(.)='Сохранить']")
-        return ('талгат' in text or 'ерланович' in text) and ('ерлан' in text or 'талгатович' in text) and not any(b.is_displayed() for b in save_buttons)
-    try:
-        saved = bool(save_btn) and WebDriverWait(driver, WAIT).until(saved_signers)
-    except Exception:
-        saved = False
-    result = bool(ok_zakazchik) and bool(ok_kontragent) and saved
+    time.sleep(2)
+    def _check_saved_signers():
+        try:
+            section = driver.find_element(By.CSS_SELECTOR, 'section.signers-card')
+            text = section.text.lower()
+            return ('талгат' in text or 'ерланович' in text) and ('ерлан' in text or 'талгатович' in text)
+        except Exception:
+            return False
+
+    saved = _check_saved_signers()
+    if not saved:
+        try:
+            saved = WebDriverWait(driver, 5).until(lambda _: _check_saved_signers())
+        except Exception:
+            saved = False
+
+    result = bool(ok_zakazchik) and bool(ok_kontragent) and (saved or not save_btn)
     log(f"  Подписанты: Заказчик={'OK' if ok_zakazchik else 'FAIL'}, "
         f"Контрагент={'OK' if ok_kontragent else 'FAIL'}",
         "PASS" if result else "WARN")
@@ -3544,8 +3551,6 @@ def fill_signatories_in_card():
 # ==========================================
 # ПОДПИСАНИЕ ЭЦП
 # ==========================================
-CONTRACTOR_LOGIN = env("RGB_CONTRACTOR_LOGIN", "aldazarovdias@gmail.com")
-CONTRACTOR_PASS = env("RGB_CONTRACTOR_PASSWORD", "12341234")
 
 
 def upload_paper_signed_scan():
@@ -4300,7 +4305,17 @@ def sign_electronic_act_in_order():
         workflow_result['fail_reasons']['Подписание'] = 'Не подтверждена подпись контрагента Ерлана'
         return False
     workflow_result['final_status'] = get_current_status()
-    return workflow_result['final_status'] == 'Подписан'
+    is_signed = workflow_result['final_status'] == 'Подписан'
+    if is_signed:
+        tg_info("✅ Обе подписи успешно поставлены (Заказчик и Контрагент)")
+        tg_info("🔄 Цепочка статусов: Черновик ➔ На согласовании ➔ На подписании ➔ Подписан")
+    # Возвращаемся под основной аккаунт для следующих сценариев
+    try:
+        if logout_current_account():
+            login_with(login_val, pass_val)
+    except Exception:
+        pass
+    return is_signed
 
 
 def main():

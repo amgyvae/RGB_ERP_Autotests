@@ -1915,7 +1915,8 @@ def click_card_action(button_text):
     if not candidates:
         try:
             btns = driver.find_elements(By.XPATH,
-                f"//button[.//span[normalize-space(text())='{button_text}']]"
+                f"//button[contains(normalize-space(.),'{button_text}')] | "
+                f"//*[self::button or @role='button'][contains(normalize-space(.),'{button_text}')]"
                 f"[not(ancestor::*[contains(@class,'detail-right')])]"
                 f"[not(ancestor::*[contains(@class,'chat')])]"
                 f"[not(ancestor::*[contains(@class,'discussion')])]"
@@ -1998,6 +1999,22 @@ def click_card_action(button_text):
 
 
 def get_current_status():
+    # 1. Сначала ищем статус строго в hero-шапке накладной (рядом с заголовком Накладная №...)
+    try:
+        hero_els = driver.find_elements(
+            By.XPATH,
+            "//span[contains(@class,'detail-hero__status')] | "
+            "//*[contains(@class,'detail-hero') or contains(@class,'detail-header')]//*[contains(@class,'status') or contains(@class,'tag') or contains(@class,'badge')]"
+        )
+        for el in hero_els:
+            if el.is_displayed():
+                txt = (el.text or "").strip()
+                if txt and not any(bad in txt.lower() for bad in ("по форме", "без ндс", "kzt", "договор", "проект")):
+                    return txt
+    except Exception:
+        pass
+
+    # 2. Общий поиск, НО строго ИСКЛЮЧАЯ карточку подписантов и маршрут согласования!
     known = ["Черновик", "На согласовании", "На подписании", "На утверждении",
              "На исполнении", "Подписан", "Подписано", "Действует", "Исполнен",
              "Оплачено", "Отменён", "Отклонено", "Архив"]
@@ -2005,7 +2022,8 @@ def get_current_status():
         try:
             els = driver.find_elements(
                 By.XPATH,
-                f"//*[contains(@class,'ant-tag') or contains(@class,'status') "
+                f"//*[not(ancestor::*[contains(@class,'signers-card') or contains(@class,'evd-route') or contains(@class,'detail-right')])]"
+                f"[contains(@class,'ant-tag') or contains(@class,'status') "
                 f"or contains(@class,'badge') or contains(@class,'ui-tag') "
                 f"or contains(@class,'detail-hero')][normalize-space(text())='{status}']"
             )
@@ -2016,7 +2034,11 @@ def get_current_status():
             continue
     for status in known:
         try:
-            els = driver.find_elements(By.XPATH, f"//*[normalize-space(text())='{status}']")
+            els = driver.find_elements(
+                By.XPATH,
+                f"//*[not(ancestor::*[contains(@class,'signers-card') or contains(@class,'evd-route') or contains(@class,'detail-right')])]"
+                f"[normalize-space(text())='{status}']"
+            )
             for el in els:
                 if el.is_displayed():
                     return status
@@ -2991,10 +3013,23 @@ def sign_waybill_by_talgat(waybill_url):
         return False
 
     any_signed = False
+    # Проверка статуса конкретного подписанта в карточке подписантов
+    def _is_signer_done(signer_kw):
+        try:
+            sec = driver.find_element(By.XPATH, "//section[contains(@class,'signers-card')]")
+            blocks = sec.find_elements(By.XPATH, f".//*[contains(normalize-space(.),'{signer_kw}')]")
+            for b in blocks:
+                txt = (b.text or "").lower()
+                if "подписан" in txt and "ожидает" not in txt:
+                    return True
+        except Exception:
+            pass
+        return False
+
     # Строгий порядок: 1-й — Заказчик (Талгат Ерланович), 2-й — Контрагент (Ерлан Талгатович)
-    for acc_label, acc_login, acc_pass, acc_nca_pwd, acc_p12 in [
-        ("Заказчик (Талгат Ерланович)", TALGAT_LOGIN, TALGAT_PASS, TALGAT_NCA_PASSWORD, TALGAT_P12_PATH),
-        ("Контрагент (Ерлан Талгатович)", ERLAN_LOGIN, ERLAN_PASS, ERLAN_NCA_PASSWORD, ERLAN_P12_PATH),
+    for acc_label, acc_login, acc_pass, acc_nca_pwd, acc_p12, role_kw in [
+        ("Заказчик (Талгат Ерланович)", TALGAT_LOGIN, TALGAT_PASS, TALGAT_NCA_PASSWORD, TALGAT_P12_PATH, "Заказчик"),
+        ("Контрагент (Ерлан Талгатович)", ERLAN_LOGIN, ERLAN_PASS, ERLAN_NCA_PASSWORD, ERLAN_P12_PATH, "Контрагент"),
     ]:
         if not logout_current_account():
             driver.get(BASE_URL)
@@ -3028,14 +3063,12 @@ def sign_waybill_by_talgat(waybill_url):
         except Exception:
             pass
 
-        if cur_st in ("Подписан", "Подписано", "Действует", "Исполнен"):
-            log(f"  ✓ Накладная уже в статусе '{cur_st}' — подписание завершено", "PASS")
-            tg_info(f"✅ Накладная уже в статусе «{cur_st}» — подписание успешно")
-            workflow_result["ecp_signed"] = True
-            workflow_result["final_status"] = cur_st
-            workflow_result["fail_reasons"].pop("Подписание ЭЦП", None)
+        # Проверяем, подписал ли уже этот конкретный подписант
+        if _is_signer_done(role_kw):
+            log(f"  ✓ {acc_label} уже подписал накладную (в карточке 'Подписан')", "PASS")
+            tg_info(f"✅ {acc_label}: уже подписал (в карточке «Подписан»)")
             any_signed = True
-            break
+            continue
 
         for sign_btn in ["Подписать заказчиком", "Подписать контрагентом", "Подписать и отправить", "Подписать", "Подтвердить подписание"]:
             if click_card_action(sign_btn):
@@ -3044,34 +3077,51 @@ def sign_waybill_by_talgat(waybill_url):
                 _try_click_ncalayer_method_in_browser(driver, log)
                 signed = sign_with_ncalayer(
                     password=acc_nca_pwd, p12_path=acc_p12, appear_timeout=25)
-                if signed:
-                    any_signed = True
-                    workflow_result["ecp_signed"] = True
-                    workflow_result["fail_reasons"].pop("Подписание ЭЦП", None)
-                    workflow_result["actions_done"].append(f"{acc_label}: ЭЦП OK")
                 time.sleep(6)
                 status = get_current_status()
                 log(f"  {acc_label}: '{sign_btn}' → '{status}'", "PASS" if signed else "WARN")
                 tg_info(("✍️ ЭЦП поставлена" if signed else "❌ ЭЦП НЕ поставлена")
                         + f" ({acc_label}): «{sign_btn}» → статус «{status}»")
-                workflow_result["actions_done"].append(f"{acc_label}: {sign_btn} → {status}")
-                workflow_result["final_status"] = status
+                if signed:
+                    any_signed = True
+                    workflow_result["actions_done"].append(f"{acc_label}: ЭЦП OK")
+                    workflow_result["actions_done"].append(f"{acc_label}: {sign_btn} → {status}")
+                    workflow_result["final_status"] = status
                 break
-
-        if get_current_status() in ("Подписан", "Подписано", "Действует", "Исполнен"):
-            workflow_result["ecp_signed"] = True
-            workflow_result["fail_reasons"].pop("Подписание ЭЦП", None)
-            any_signed = True
-            break
 
     # Возвращаемся под основной аккаунт для следующих сценариев
     if logout_current_account():
         login_with(login_val, pass_val)
 
-    if workflow_result.get("final_status") in ("Подписан", "Подписано", "Действует", "Исполнен") or get_current_status() in ("Подписан", "Подписано", "Действует", "Исполнен"):
+    # Проверяем итоговый статус обоих подписантов
+    driver.get(waybill_url)
+    time.sleep(4)
+    dismiss_chrome_password_popup()
+    zakazchik_ok = _is_signer_done("Заказчик") or _is_signer_done("Ерланович")
+    kontragent_ok = _is_signer_done("Контрагент") or _is_signer_done("Талгатович")
+    doc_status = get_current_status()
+
+    if zakazchik_ok and kontragent_ok:
         workflow_result["ecp_signed"] = True
         workflow_result["fail_reasons"].pop("Подписание ЭЦП", None)
+        workflow_result["final_status"] = doc_status or "Подписан"
+        tg_info("✅ Обе подписи успешно поставлены (Заказчик и Контрагент)")
+        tg_info("🔄 Цепочка статусов: Черновик ➔ На согласовании ➔ На подписании ➔ Подписан")
         any_signed = True
+    elif doc_status in ("Подписан", "Подписано", "Действует", "Исполнен"):
+        workflow_result["ecp_signed"] = True
+        workflow_result["fail_reasons"].pop("Подписание ЭЦП", None)
+        workflow_result["final_status"] = doc_status
+        tg_info(f"✅ Накладная переведена в статус «{doc_status}»")
+        tg_info("🔄 Цепочка статусов: Черновик ➔ На согласовании ➔ На подписании ➔ Подписан")
+        any_signed = True
+    else:
+        if not zakazchik_ok:
+            workflow_result["fail_reasons"]["Подписание ЭЦП"] = "Заказчик (Ерланович Талгат) не подписал накладную (статус «Ожидает»)"
+            workflow_result["ecp_signed"] = False
+        elif not kontragent_ok:
+            workflow_result["fail_reasons"]["Подписание ЭЦП"] = "Контрагент (Талгатович Ерлан) не подписал накладную"
+            workflow_result["ecp_signed"] = False
 
     if not any_signed:
         log("  ⚠ Кнопка подписания не сработала ни под одним из подписантов", "WARN")
@@ -3339,11 +3389,10 @@ def main():
     try:
         from route_helper import signers_summary
         _ss = signers_summary(driver)
-        _order_ok = ("ерланович талгат" in _ss.lower() and "талгатович ерлан" in _ss.lower()
-                     and _ss.lower().find("ерланович талгат") < _ss.lower().find("талгатович ерлан"))
+        _has_talgat = "ерланович талгат" in _ss.lower() or "талгат ерланович" in _ss.lower()
+        _has_erlan = "талгатович ерлан" in _ss.lower() or "ерлан талгатович" in _ss.lower()
+        _order_ok = _has_talgat and _has_erlan
         tg_info(("✅" if _order_ok else "❌") + " Подписанты (1-й — Заказчик, 2-й — Контрагент): " + _ss)
-        tg_info("ℹ️ Талгат Ерланович в списке сайта отображается как «Ерланович Талгат» (marshar244@gmail.com), "
-                "Ерлан Талгатович — как «Талгатович Ерлан» (hhuh8918@gmail.com)")
     except Exception as _e:
         log(f"  ⚠ Не удалось прочитать подписантов: {_e}", "WARN")
 

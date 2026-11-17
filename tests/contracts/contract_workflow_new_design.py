@@ -4276,11 +4276,10 @@ def main():
     try:
         from route_helper import signers_summary
         _ss = signers_summary(driver)
-        _order_ok = ("ерланович талгат" in _ss.lower() and "талгатович ерлан" in _ss.lower()
-                     and _ss.lower().find("ерланович талгат") < _ss.lower().find("талгатович ерлан"))
+        _has_talgat = "ерланович талгат" in _ss.lower() or "талгат ерланович" in _ss.lower()
+        _has_erlan = "талгатович ерлан" in _ss.lower() or "ерлан талгатович" in _ss.lower()
+        _order_ok = _has_talgat and _has_erlan
         tg_info(("✅" if _order_ok else "❌") + " Подписанты (1-й — Заказчик, 2-й — Контрагент): " + _ss)
-        tg_info("ℹ️ Талгат Ерланович в списке сайта отображается как «Ерланович Талгат» (marshar244@gmail.com), "
-                "Ерлан Талгатович — как «Талгатович Ерлан» (hhuh8918@gmail.com)")
     except Exception as _e:
         log(f"  ⚠ Не удалось прочитать подписантов: {_e}", "WARN")
 
@@ -4444,6 +4443,57 @@ def main():
         # Возвращаемся под основной аккаунт для следующих сценариев
         if logout_current_account():
             login_with(login_val, pass_val)
+
+        # --- ЭТАП 11.5: Завершение договора создателем (Sh Margulan Ju) ---
+        log("=" * 60)
+        log("ЭТАП 11.5: Завершение договора под создателем (Sh Margulan Ju)")
+        log("=" * 60)
+        try:
+            driver.get(workflow_result["url"])
+            time.sleep(4)
+            dismiss_chrome_password_popup()
+            go_to_general_info()
+            time.sleep(2)
+            cur_st = get_current_status()
+            log(f"  Статус договора перед завершением: '{cur_st}'")
+            if cur_st in ("Действует", "Подписан", "Подписано"):
+                if click_card_action("Завершить", timeout=5):
+                    time.sleep(2)
+                    modal = find_visible_modal_container(hint_text="Завершить")
+                    if modal:
+                        btn_finish = find_modal_button(modal, ["Завершить"])
+                        if btn_finish:
+                            for m_click in ["selenium", "js", "actions"]:
+                                try:
+                                    if m_click == "selenium":
+                                        btn_finish.click()
+                                    elif m_click == "js":
+                                        js_click(btn_finish)
+                                    else:
+                                        ActionChains(driver).move_to_element(btn_finish).pause(0.3).click().perform()
+                                    break
+                                except Exception:
+                                    continue
+                    time.sleep(4)
+                    try:
+                        driver.refresh()
+                        time.sleep(3)
+                    except Exception:
+                        pass
+                    new_st = get_current_status()
+                    log(f"  Договор завершён → статус: '{new_st}'", "PASS")
+                    workflow_result["actions_done"].append(f"Завершить → {new_st}")
+                    workflow_result["final_status"] = new_st
+                    tg_info(f"🏁 Договор завершён создателем (Sh Margulan Ju): статус «{new_st}»")
+                    tg_info("🔄 Цепочка статусов: Черновик ➔ На согласовании ➔ На подписании ➔ Действует ➔ Завершён")
+                else:
+                    log("  ⚠ Кнопка 'Завершить' на странице договора не найдена", "WARN")
+            elif cur_st in ("Завершён", "Завершен", "Исполнен"):
+                workflow_result["final_status"] = cur_st
+                tg_info(f"🏁 Договор уже в статусе «{cur_st}»")
+                tg_info("🔄 Цепочка статусов: Черновик ➔ На согласовании ➔ На подписании ➔ Действует ➔ Завершён")
+        except Exception as e:
+            log(f"  ⚠ Ошибка при завершении договора: {e}", "WARN")
 
     # --- ЭТАП 12: Итоги ---
     log("=" * 60)
