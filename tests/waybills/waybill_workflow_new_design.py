@@ -2991,10 +2991,10 @@ def sign_waybill_by_talgat(waybill_url):
         return False
 
     any_signed = False
-    # Строгий порядок: 1-й — Поставщик/Контрагент (Ерлан Талгатович), 2-й — Заказчик (Талгат Ерланович)
+    # Строгий порядок: 1-й — Заказчик (Талгат Ерланович), 2-й — Контрагент (Ерлан Талгатович)
     for acc_label, acc_login, acc_pass, acc_nca_pwd, acc_p12 in [
-        ("Контрагент (Ерлан Талгатович)", ERLAN_LOGIN, ERLAN_PASS, ERLAN_NCA_PASSWORD, ERLAN_P12_PATH),
         ("Заказчик (Талгат Ерланович)", TALGAT_LOGIN, TALGAT_PASS, TALGAT_NCA_PASSWORD, TALGAT_P12_PATH),
+        ("Контрагент (Ерлан Талгатович)", ERLAN_LOGIN, ERLAN_PASS, ERLAN_NCA_PASSWORD, ERLAN_P12_PATH),
     ]:
         if not logout_current_account():
             driver.get(BASE_URL)
@@ -3028,9 +3028,20 @@ def sign_waybill_by_talgat(waybill_url):
         except Exception:
             pass
 
+        if cur_st in ("Подписан", "Подписано", "Действует", "Исполнен"):
+            log(f"  ✓ Накладная уже в статусе '{cur_st}' — подписание завершено", "PASS")
+            tg_info(f"✅ Накладная уже в статусе «{cur_st}» — подписание успешно")
+            workflow_result["ecp_signed"] = True
+            workflow_result["final_status"] = cur_st
+            workflow_result["fail_reasons"].pop("Подписание ЭЦП", None)
+            any_signed = True
+            break
+
         for sign_btn in ["Подписать заказчиком", "Подписать контрагентом", "Подписать и отправить", "Подписать", "Подтвердить подписание"]:
             if click_card_action(sign_btn):
                 log(f"  Нажата '{sign_btn}' ({acc_label}), жду NCALayer...")
+                from ncalayer_headless import _try_click_ncalayer_method_in_browser
+                _try_click_ncalayer_method_in_browser(driver, log)
                 signed = sign_with_ncalayer(
                     password=acc_nca_pwd, p12_path=acc_p12, appear_timeout=25)
                 if signed:
@@ -3048,11 +3059,19 @@ def sign_waybill_by_talgat(waybill_url):
                 break
 
         if get_current_status() in ("Подписан", "Подписано", "Действует", "Исполнен"):
+            workflow_result["ecp_signed"] = True
+            workflow_result["fail_reasons"].pop("Подписание ЭЦП", None)
+            any_signed = True
             break
 
     # Возвращаемся под основной аккаунт для следующих сценариев
     if logout_current_account():
         login_with(login_val, pass_val)
+
+    if workflow_result.get("final_status") in ("Подписан", "Подписано", "Действует", "Исполнен") or get_current_status() in ("Подписан", "Подписано", "Действует", "Исполнен"):
+        workflow_result["ecp_signed"] = True
+        workflow_result["fail_reasons"].pop("Подписание ЭЦП", None)
+        any_signed = True
 
     if not any_signed:
         log("  ⚠ Кнопка подписания не сработала ни под одним из подписантов", "WARN")
@@ -3267,6 +3286,12 @@ def main():
     time.sleep(4)
     dismiss_chrome_password_popup()
 
+    try:
+        from route_helper import current_user_name
+        tg_info(f"👤 Вошли как: {current_user_name(driver) or login_val} (создатель накладной)")
+    except Exception:
+        pass
+
     # --- ЭТАП 7: Маршрут согласования ---
     log("ЭТАП 7: Маршрут согласования (Sh Margulan Ju)")
     dismiss_chrome_password_popup()
@@ -3282,6 +3307,15 @@ def main():
             "не удалось создать этап или выбрать Sh Margulan Ju в маршруте")
         time.sleep(2)
     time.sleep(2)
+    try:
+        from route_helper import route_summary, route_names, is_margulan_name
+        _rs = route_summary(driver)
+        _rn = route_names(driver)
+        _route_ok = bool(_rn) and all(is_margulan_name(n) for n in _rn)
+        tg_info(("✅" if _route_ok else "❌") + f" Маршрут согласования: {_rs}"
+                + ("" if _route_ok else " — ожидался только Sh Margulan Ju"))
+    except Exception as _e:
+        log(f"  ⚠ Не удалось прочитать маршрут: {_e}", "WARN")
 
     # --- ЭТАП 8: Подписанты ---
     log("ЭТАП 8: Подписанты (Заказчик=Талгат Ерланович, Контрагент=Ерлан Талгатович)")
@@ -3302,6 +3336,16 @@ def main():
         go_to_details_tab()
         time.sleep(3)
     time.sleep(2)
+    try:
+        from route_helper import signers_summary
+        _ss = signers_summary(driver)
+        _order_ok = ("ерланович талгат" in _ss.lower() and "талгатович ерлан" in _ss.lower()
+                     and _ss.lower().find("ерланович талгат") < _ss.lower().find("талгатович ерлан"))
+        tg_info(("✅" if _order_ok else "❌") + " Подписанты (1-й — Заказчик, 2-й — Контрагент): " + _ss)
+        tg_info("ℹ️ Талгат Ерланович в списке сайта отображается как «Ерланович Талгат» (marshar244@gmail.com), "
+                "Ерлан Талгатович — как «Талгатович Ерлан» (hhuh8918@gmail.com)")
+    except Exception as _e:
+        log(f"  ⚠ Не удалось прочитать подписантов: {_e}", "WARN")
 
     # --- ЭТАП 9: Отправить / Подписание ---
     if PAPER_MODE:
@@ -3319,6 +3363,7 @@ def main():
                     pass
                 status = get_current_status()
                 log(f"  '{btn}' → статус: '{status}'", "PASS")
+                tg_info(f"📤 Нажата «{btn}» → статус: «{status}»")
                 workflow_result["actions_done"].append(f"{btn} → {status}")
                 workflow_result["final_status"] = status
                 workflow_result["ecp_signed"] = status is not None and status != "Черновик"
@@ -3354,6 +3399,7 @@ def main():
                     pass
                 status = get_current_status()
                 log(f"  '{btn}' → статус: '{status}'", "PASS")
+                tg_info(f"📤 Нажата «{btn}» → статус: «{status}»")
                 workflow_result["actions_done"].append(f"{btn} → {status}")
                 workflow_result["final_status"] = status
                 sent = True
@@ -3371,6 +3417,7 @@ def main():
             time.sleep(5)
             status = get_current_status()
             log(f"  '{approve_btn}' → '{status}'", "PASS")
+            tg_info(f"✅ Согласовано под Sh Margulan Ju: нажата «{approve_btn}» → статус: «{status}»")
             workflow_result["actions_done"].append(f"{approve_btn} → {status}")
             workflow_result["final_status"] = status
             break

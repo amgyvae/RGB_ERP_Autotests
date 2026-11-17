@@ -617,6 +617,22 @@ def _collect_document_urls(limit: int = 5):
             matches = url_regex.findall(raw)
             for u in matches:
                 u = u.rstrip(".,;)")
+                clean_path = u.split("?")[0].rstrip("/")
+                if clean_path.endswith((
+                    "/documents/waybills",
+                    "/documents/invoices",
+                    "/documents/contracts",
+                    "/documents/acts",
+                    "/documents/custom",
+                    "/documents",
+                    "/schedules/gpr",
+                    "/schedules",
+                    "/contacts",
+                    "/projects",
+                    "/tasks",
+                    "/news",
+                )):
+                    continue
                 if any(k in u for k in ("/documents/", "/schedules/", "/projects/", "/contacts/", "/tasks/", "/news/")):
                     if u not in urls:
                         urls.append(u)

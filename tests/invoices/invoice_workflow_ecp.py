@@ -101,6 +101,8 @@ driver.implicitly_wait(0)  # ВАЖНО: было 3 — при большом к
 # "пробуй способ 1 → не нашёл → способ 2" каждая неудачная попытка
 # молча ждала до 3 секунд лишних. Явные ожидания (time.sleep/
 # WebDriverWait) в коде расставлены сами, этого достаточно.
+driver.set_page_load_timeout(35)
+driver.set_script_timeout(30)
 login_val = env("RGB_ACCOUNT1_LOGIN", "jyktmargyplay2@gmail.com")
 pass_val = env("RGB_ACCOUNT1_PASSWORD", env("RGB_ACCOUNT1_PASSWORD_ALT", "12341234"))
 
@@ -201,6 +203,15 @@ def log(msg, tag="INFO"):
             _LOG_FILE.flush()
         except Exception:
             pass
+
+
+def tg_info(text):
+    """Строка в блок «Ход процесса» детального отчёта Telegram + обычный лог."""
+    log(text)
+    try:
+        print("TGINFO| " + str(text), flush=True)
+    except Exception:
+        pass
 
 
 def shot(name):
@@ -2773,8 +2784,13 @@ def create_invoice_via_modal():
         try:
             cur = (trigger.get_attribute("textContent") or "").strip()
             if cur and "выбер" not in cur.lower():
-                log("    • " + label + ": уже заполнено ('" + cur[:30] + "')")
-                return True
+                target_matched = True
+                if target:
+                    target_list = target if isinstance(target, (list, tuple)) else [str(target)]
+                    target_matched = any(t.lower() in cur.lower() for t in target_list)
+                if target_matched:
+                    log("    • " + label + ": уже заполнено ('" + cur[:30] + "')")
+                    return True
         except Exception:
             pass
 
@@ -2824,6 +2840,8 @@ def create_invoice_via_modal():
 
         if target:
             try:
+                target_str = target[0] if isinstance(target, (list, tuple)) else str(target)
+                target_term = target_str.strip().split()[0]
                 sinp = panel.find_element(
                     By.XPATH, ".//input[contains(@class,'ui-select__search-input')]")
                 try:
@@ -2831,19 +2849,29 @@ def create_invoice_via_modal():
                 except Exception:
                     js_click(sinp)
                 time.sleep(0.3)
+                sinp.clear()
+                try:
+                    sinp.send_keys(Keys.COMMAND + "a")
+                except Exception:
+                    pass
                 sinp.send_keys(Keys.CONTROL + "a")
                 sinp.send_keys(Keys.BACKSPACE)
                 time.sleep(0.2)
-                sinp.send_keys(target.split()[0])
+                sinp.send_keys(target_term)
                 time.sleep(1.2)
             except Exception:
                 pass
 
         options = opts_of(panel)
-        if not options:
+        if not options and target:
             try:
                 sinp = panel.find_element(
                     By.XPATH, ".//input[contains(@class,'ui-select__search-input')]")
+                sinp.clear()
+                try:
+                    sinp.send_keys(Keys.COMMAND + "a")
+                except Exception:
+                    pass
                 sinp.send_keys(Keys.CONTROL + "a")
                 sinp.send_keys(Keys.BACKSPACE)
                 time.sleep(1.0)
@@ -2858,7 +2886,7 @@ def create_invoice_via_modal():
 
         picked = None
         if target:
-            target_list = target if isinstance(target, (list, tuple)) else [target]
+            target_list = target if isinstance(target, (list, tuple)) else [str(target)]
             # Сначала точное/подстрочное совпадение
             for o in options:
                 txt_low = o["text"].lower()
@@ -3546,6 +3574,17 @@ def main():
     log(f"ЗАЯВКА НА ОПЛАТУ (с ЭЦП): {INVOICE_NUM}")
     log("=" * 60)
 
+    # Закрываем любые зависшие модалки от предыдущего сценария
+    try:
+        ActionChains(driver).send_keys(Keys.ESCAPE).perform()
+        time.sleep(0.3)
+        for cb in driver.find_elements(By.XPATH, "//div[contains(@class,'action-modal') or contains(@class,'modal')]//button[contains(.,'Отмена')]"):
+            if cb.is_displayed():
+                js_click(cb)
+                time.sleep(0.5)
+    except Exception:
+        pass
+
     # --- ЭТАП 0: Открытие сайта (иначе браузер остаётся на data:, и логин-форма никогда не появляется) ---
     if not driver.current_url or driver.current_url.startswith("data:") or "testportal.rgbgroup.kz" not in driver.current_url:
         driver.get(BASE_URL)
@@ -3690,6 +3729,12 @@ def main():
     time.sleep(4)
     dismiss_chrome_password_popup()
 
+    try:
+        from route_helper import current_user_name
+        tg_info(f"👤 Вошли как: {current_user_name(driver) or login_val} (создатель заявки)")
+    except Exception:
+        pass
+
     # --- ЭТАП 6: Предмет платежа ---
     log("ЭТАП 6: Предмет платежа")
     for retry in range(2):
@@ -3718,6 +3763,23 @@ def main():
             break
         time.sleep(2)
     time.sleep(2)
+    try:
+        from route_helper import route_summary, route_names, is_margulan_name
+        _rs = route_summary(driver)
+        _rn = route_names(driver)
+        _route_ok = bool(_rn) and all(is_margulan_name(n) for n in _rn)
+        tg_info(("✅" if _route_ok else "❌") + f" Маршрут согласования: {_rs}"
+                + ("" if _route_ok else " — ожидался только Sh Margulan Ju"))
+    except Exception as _e:
+        log(f"  ⚠ Не удалось прочитать маршрут: {_e}", "WARN")
+
+    try:
+        from route_helper import signers_summary
+        _ss = signers_summary(driver)
+        if _ss and "не найден" not in _ss.lower():
+            tg_info(f"✍️ Подписанты: {_ss}")
+    except Exception:
+        pass
 
     # --- ЭТАП 8: На согласование ---
     log("ЭТАП 8: 'На согласование'")
@@ -3727,6 +3789,7 @@ def main():
         time.sleep(4)
         status = get_current_status()
         log(f"  Статус: '{status}'", "PASS")
+        tg_info(f"📤 Нажата «На согласование» → статус: «{status}»")
         workflow_result["actions_done"].append(f"На согласование → {status}")
         workflow_result["final_status"] = status
     else:
@@ -3742,6 +3805,7 @@ def main():
             time.sleep(5)
             status = get_current_status()
             log(f"  '{approve_btn}' → '{status}'", "PASS")
+            tg_info(f"✅ Согласовано под Sh Margulan Ju: нажата «{approve_btn}» → статус: «{status}»")
             workflow_result["actions_done"].append(f"{approve_btn} → {status}")
             workflow_result["final_status"] = status
             break
