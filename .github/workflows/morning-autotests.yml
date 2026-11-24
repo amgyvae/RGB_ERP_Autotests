@@ -1,23 +1,21 @@
-name: Daily ERP Autotests (08:00 Almaty)
+name: Daily ERP Autotests (06:00 Almaty)
 
 on:
-  # Ежедневный утренний запуск в 07:00–08:00 по времени Алматы (UTC+5).
-  # На бесплатных раннерах GitHub Actions очередь schedule может задерживаться от 0 до 7 часов
-  # (из-за чего одиночный cron 02:45 UTC фактически стартовал в 13:50–14:45 Алматы).
-  # Каскад триггеров покрывает задержки очереди от 0 до 7.5 ч, а шаг «gate» пропускает
-  # РОВНО ОДИН запуск в сутки строго в утреннем окне Алматы (06:40–10:15 UTC+5)
-  # и мгновенно отсекает ночные/послеобеденные срабатывания без уведомлений в Telegram.
+  # Ежедневный утренний запуск ровно в 06:00 по времени Алматы (UTC+5 = 01:00 UTC).
+  # На бесплатных раннерах GitHub Actions очередь schedule может задерживаться от 5 мин до 2 часов.
+  # Каскад триггеров с 04:00 до 06:15 Алматы компенсирует задержку очереди, а шаг «gate»:
+  # 1) пропускает РОВНО ОДИН запуск в сутки в утреннем окне 05:50–07:30 Алматы;
+  # 2) если триггер пришёл чуть раньше (05:50–05:59), ждёт ровно до 06:00:00 Алматы;
+  # 3) отсекает все ночные и поздние (после 07:30) срабатывания без уведомлений в Telegram.
+  # Для точности до секунды (06:00:00) также поддерживается внешний вебхук repository_dispatch (cron-job.org).
   schedule:
-    - cron: "30 19 * * *"
-    - cron: "15 20 * * *"
-    - cron: "0 21 * * *"
-    - cron: "45 21 * * *"
-    - cron: "30 22 * * *"
-    - cron: "30 23 * * *"
-    - cron: "30 0 * * *"
-    - cron: "15 1 * * *"
-    - cron: "0 2 * * *"
-    - cron: "45 2 * * *"
+    - cron: "0 23 * * *"   # 04:00 Алматы (резерв при задержке очереди GitHub до 2 ч)
+    - cron: "30 23 * * *"  # 04:30 Алматы (резерв при задержке до 1.5 ч)
+    - cron: "0 0 * * *"    # 05:00 Алматы (резерв при задержке до 1 ч)
+    - cron: "30 0 * * *"   # 05:30 Алматы (резерв при задержке до 30 мин)
+    - cron: "50 0 * * *"   # 05:50 Алматы (резерв при задержке ~10 мин)
+    - cron: "0 1 * * *"    # 06:00 Алматы (точное целевое время)
+    - cron: "15 1 * * *"   # 06:15 Алматы (страховочный триггер)
   # Поддержка точного внешнего вебхука (например cron-job.org) при необходимости
   repository_dispatch:
     types: [run-autotests]
@@ -67,7 +65,7 @@ jobs:
       modules: ${{ steps.matrix.outputs.modules || steps.gate.outputs.modules }}
       web_only: ${{ steps.matrix.outputs.web_only || steps.gate.outputs.web_only }}
     steps:
-      - name: Проверка утреннего окна Алматы (07:00–10:15) и защита от дублей
+      - name: Проверка утреннего окна Алматы (06:00) и защита от дублей
         id: gate
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -78,6 +76,7 @@ jobs:
           python3 - <<'PY'
           import json
           import os
+          import time
           import urllib.request
           from datetime import datetime, timedelta, timezone
 
@@ -91,7 +90,8 @@ jobs:
           summary_path = os.environ.get("GITHUB_STEP_SUMMARY", "")
 
           def finish(should_run: bool, reason: str):
-              print(f"[GATE] {now_alm.strftime('%Y-%m-%d %H:%M:%S')} Almaty | event={event} | should_run={should_run} | {reason}")
+              now_str = datetime.now(almaty_tz).strftime('%Y-%m-%d %H:%M:%S')
+              print(f"[GATE] {now_str} Almaty | event={event} | should_run={should_run} | {reason}")
               with open(out_path, "a", encoding="utf-8") as f:
                   f.write(f"should_run={'true' if should_run else 'false'}\n")
                   if not should_run:
@@ -100,17 +100,17 @@ jobs:
                       f.write("web_only=true\n")
               if summary_path:
                   with open(summary_path, "a", encoding="utf-8") as sf:
-                      sf.write(f"### Утренний фильтр запуска\n- Время Алматы: `{now_alm.strftime('%d.%m.%Y %H:%M:%S')} (UTC+5)`\n- Решение: `{'ЗАПУСК' if should_run else 'ПРОПУСК'}` — {reason}\n")
+                      sf.write(f"### Утренний фильтр запуска\n- Время Алматы: `{datetime.now(almaty_tz).strftime('%d.%m.%Y %H:%M:%S')} (UTC+5)`\n- Решение: `{'ЗАПУСК' if should_run else 'ПРОПУСК'}` — {reason}\n")
 
           if event != "schedule":
               finish(True, f"Ручной/внешний запуск ({event})")
               raise SystemExit(0)
 
           mins = now_alm.hour * 60 + now_alm.minute
-          # Утреннее окно Алматы: с 06:40 до 10:15 (07:00–08:00 целевой старт + запас).
-          # Все ночные и послеобеденные (13:00–15:00) запоздавшие cron-срабатывания отсекаются.
-          if not (6 * 60 + 40 <= mins <= 10 * 60 + 15):
-              finish(False, f"Вне утреннего окна 06:40–10:15 Алматы (сейчас {now_alm.strftime('%H:%M')})")
+          # Утреннее окно Алматы: с 05:50 до 07:30 (целевой старт ровно в 06:00).
+          # Все ночные и поздние (после 07:30, например 09:22) запоздавшие cron-срабатывания отсекаются.
+          if not (5 * 60 + 50 <= mins <= 7 * 60 + 30):
+              finish(False, f"Вне утреннего окна 05:50–07:30 Алматы (сейчас {now_alm.strftime('%H:%M')})")
               raise SystemExit(0)
 
           def gh_get(url: str):
@@ -129,11 +129,14 @@ jobs:
 
           if repo and token:
               try:
-                  runs_url = f"https://api.github.com/repos/{repo}/actions/workflows/morning-autotests.yml/runs?event=schedule&per_page=30"
+                  # Проверяем ВСЕ запуски за сегодня (включая schedule и repository_dispatch), чтобы не было дублей
+                  runs_url = f"https://api.github.com/repos/{repo}/actions/workflows/morning-autotests.yml/runs?per_page=30"
                   runs = gh_get(runs_url).get("workflow_runs", [])
                   for r in runs:
                       rid = str(r.get("id", ""))
                       if not rid or rid == cur_id:
+                          continue
+                      if r.get("event") not in ("schedule", "repository_dispatch"):
                           continue
                       started_alm = parse_alm(r.get("run_started_at") or r.get("created_at"))
                       if not started_alm or started_alm.date() != now_alm.date():
@@ -159,7 +162,14 @@ jobs:
               except Exception as exc:
                   print(f"[GATE] Предупреждение при проверке истории запусков: {exc}")
 
-          finish(True, "Первый утренний запуск за сегодня в окне 06:40–10:15 Алматы")
+          # Если триггер пришёл в 05:50–05:59, ждём ровно до 06:00:00 по времени Алматы
+          target_6am = now_alm.replace(hour=6, minute=0, second=0, microsecond=0)
+          wait_sec = (target_6am - datetime.now(almaty_tz)).total_seconds()
+          if 0 < wait_sec <= 600:
+              print(f"[GATE] Ожидание {int(wait_sec)} сек до ровно 06:00:00 Алматы...")
+              time.sleep(wait_sec)
+
+          finish(True, "Утренний запуск ровно в 06:00 Алматы (окно 05:50–07:30)")
           PY
 
       - if: steps.gate.outputs.should_run == 'true'

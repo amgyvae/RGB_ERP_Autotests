@@ -202,7 +202,7 @@ def notify_suite_start(selected_keys, web_only: bool = False):
         f"📅 <b>Время старта:</b> {now_str} (Алматы, UTC+5)",
         f"🔐 <b>Режим ЭЦП:</b> {ecp_line}",
         f"⚙️ <b>Источник запуска:</b> {escape(_trigger_label())}",
-        f"👤 <b>Аккаунты:</b> Sh Margulan Ju ({escape(account)}) · доп. роль: Алдажаров Диас",
+        f"👤 <b>Аккаунты:</b> Sh Margulan Ju ({escape(account)}) · Подписанты: Талгат Ерланович, Ерлан Талгатович",
         "",
         f"✅ <b>К проверке — {len(selected_keys)} из {len(MODULES)} модулей ({planned_stages} {_plural_stages(planned_stages)}):</b>",
     ]

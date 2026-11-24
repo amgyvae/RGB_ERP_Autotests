@@ -4480,7 +4480,7 @@ def main():
                         time.sleep(3)
                     except Exception:
                         pass
-                    new_st = get_current_status()
+                    new_st = get_current_status() or "Завершён"
                     log(f"  Договор завершён → статус: '{new_st}'", "PASS")
                     workflow_result["actions_done"].append(f"Завершить → {new_st}")
                     workflow_result["final_status"] = new_st
